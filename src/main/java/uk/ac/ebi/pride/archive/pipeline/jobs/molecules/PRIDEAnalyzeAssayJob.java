@@ -38,6 +38,7 @@ import uk.ac.ebi.pride.archive.pipeline.configuration.SolrCloudMasterConfig;
 import uk.ac.ebi.pride.archive.pipeline.jobs.AbstractArchiveJob;
 import uk.ac.ebi.pride.archive.pipeline.services.pia.JmzReaderSpectrumService;
 import uk.ac.ebi.pride.archive.pipeline.services.pia.PIAModelerService;
+import uk.ac.ebi.pride.archive.pipeline.utility.BackupUtil;
 import uk.ac.ebi.pride.archive.pipeline.utility.SubmissionPipelineConstants;
 import uk.ac.ebi.pride.archive.spectra.configs.AWS3Configuration;
 import uk.ac.ebi.pride.archive.spectra.model.ArchiveSpectrum;
@@ -376,9 +377,10 @@ public class PRIDEAnalyzeAssayJob extends AbstractArchiveJob {
                                 .build();
 
                         try {
-                            moleculesService.insertProteinEvidences(proteinEvidence);
+                            BackupUtil.backupPrideMongoProteinEvidence(proteinEvidence);
+                           // moleculesService.insertProteinEvidences(proteinEvidence);
                         } catch (DuplicateKeyException ex){
-                            moleculesService.saveProteinEvidences(proteinEvidence);
+                           // moleculesService.saveProteinEvidences(proteinEvidence);
                             log.debug("The protein was already in the database -- " + proteinEvidence.getReportedAccession());
                         }
 
@@ -469,9 +471,10 @@ public class PRIDEAnalyzeAssayJob extends AbstractArchiveJob {
                         .qualityEstimationMethods(validationMethods)
                         .build();
                 try {
-                    moleculesService.insertPeptideEvidence(peptideEvidence);
+                    BackupUtil.backupPrideMongoPeptideEvidence(peptideEvidence);
+                  //  moleculesService.insertPeptideEvidence(peptideEvidence);
                 } catch (DuplicateKeyException ex){
-                    moleculesService.savePeptideEvidence(peptideEvidence);
+                   // moleculesService.savePeptideEvidence(peptideEvidence);
                     log.debug("The peptide evidence was already in the database -- " + peptideEvidence.getPeptideAccession());
                 }
             }
@@ -936,7 +939,7 @@ public class PRIDEAnalyzeAssayJob extends AbstractArchiveJob {
                         assay.setIsValid(isValid);
                         assay.setQualityEstimationMethods(validationMethods);
                         assay.setPtmsResults(modificationCount);
-                        prideProjectMongoService.updateAssay(assay);
+                       // prideProjectMongoService.updateAssay(assay);
 
                     }
 
