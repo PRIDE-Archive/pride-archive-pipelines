@@ -12,10 +12,12 @@ import java.io.IOException;
  */
 public class BackupUtil {
 
-    public static void backupPrideMongoProteinEvidence(PrideMongoProteinEvidence prideMongoProteinEvidence){
+    final static String backup_location = "/Users/hewapathirana/PRIDE/Repositories/PRIDE-Archive/pride-archive-pipelines/target/";
+
+    public static void backupPrideMongoProteinEvidence(PrideMongoProteinEvidence prideMongoProteinEvidence) {
         ObjectMapper objectMapper = new ObjectMapper();
         try {
-            String filename = prideMongoProteinEvidence.getProjectAccession() + "_" + prideMongoProteinEvidence.getAssayAccession() + "_" +  "prideMongoProteinEvidence.json";
+            String filename = prideMongoProteinEvidence.getProjectAccession() + "_" + prideMongoProteinEvidence.getAssayAccession() + "_" + "prideMongoProteinEvidence.json";
             String backupLocation = "target/" + filename;
             objectMapper.writeValue(new File(backupLocation), prideMongoProteinEvidence);
         } catch (IOException e) {
@@ -26,11 +28,24 @@ public class BackupUtil {
     public static void backupPrideMongoPeptideEvidence(PrideMongoPeptideEvidence prideMongoPeptideEvidence) {
         ObjectMapper objectMapper = new ObjectMapper();
         try {
-            String filename = prideMongoPeptideEvidence.getProjectAccession() + "_" + prideMongoPeptideEvidence.getAssayAccession() + "_" +  "PrideMongoPeptideEvidence.json";
+            String filename = prideMongoPeptideEvidence.getProjectAccession() + "_" + prideMongoPeptideEvidence.getAssayAccession() + "_" + "PrideMongoPeptideEvidence.json";
             String backupLocation = "target/" + filename;
             objectMapper.writeValue(new File(backupLocation), prideMongoPeptideEvidence);
         } catch (IOException e) {
             e.printStackTrace();
         }
+    }
+
+    public static PrideMongoProteinEvidence getPrideMongoProteinEvidenceFromBackup(String projectAccession, String assayAccession) {
+        ObjectMapper objectMapper = new ObjectMapper();
+        PrideMongoProteinEvidence prideMongoProteinEvidence = null;
+        File file = new File(backup_location + projectAccession + "_" + assayAccession + "_" + "prideMongoProteinEvidence.json");
+        try {
+            prideMongoProteinEvidence = objectMapper.readValue(file, PrideMongoProteinEvidence.class);
+        } catch (IOException e) {
+            e.printStackTrace();
+        }
+
+        return prideMongoProteinEvidence;
     }
 }
