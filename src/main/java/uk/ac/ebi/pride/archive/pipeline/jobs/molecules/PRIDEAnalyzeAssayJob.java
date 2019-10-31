@@ -16,8 +16,10 @@ import de.mpc.pia.modeller.score.ScoreModelEnum;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.batch.core.Job;
 import org.springframework.batch.core.Step;
+import org.springframework.batch.core.StepContribution;
 import org.springframework.batch.core.configuration.annotation.EnableBatchProcessing;
 import org.springframework.batch.core.configuration.annotation.StepScope;
+import org.springframework.batch.core.scope.context.ChunkContext;
 import org.springframework.batch.core.step.tasklet.Tasklet;
 import org.springframework.batch.repeat.RepeatStatus;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -31,7 +33,6 @@ import uk.ac.ebi.pride.archive.dataprovider.common.Tuple;
 import uk.ac.ebi.pride.archive.dataprovider.data.peptide.PSMProvider;
 import uk.ac.ebi.pride.archive.dataprovider.data.ptm.DefaultIdentifiedModification;
 import uk.ac.ebi.pride.archive.dataprovider.data.ptm.IdentifiedModificationProvider;
-import uk.ac.ebi.pride.archive.dataprovider.param.CvParamProvider;
 import uk.ac.ebi.pride.archive.dataprovider.param.DefaultCvParam;
 import uk.ac.ebi.pride.archive.pipeline.configuration.DataSourceConfiguration;
 import uk.ac.ebi.pride.archive.pipeline.configuration.SolrCloudMasterConfig;
@@ -106,6 +107,9 @@ public class PRIDEAnalyzeAssayJob extends AbstractArchiveJob {
 
     @Value("${pride.data.prod.directory}")
     String productionPath;
+
+    @Value("${pride.data.backup.path}")
+    String backupPath;
 
     private PIAModeller modeller;
     private MongoPrideAssay assay;
@@ -282,115 +286,118 @@ public class PRIDEAnalyzeAssayJob extends AbstractArchiveJob {
     public Step proteinPeptideIndexStep(){
         return stepBuilderFactory
                 .get(SubmissionPipelineConstants.PrideArchiveStepNames.PRIDE_ARCHIVE_MONGODB_PROTEIN_UPDATE.name())
-                .tasklet((stepContribution, chunkContext) -> {
+                .tasklet(new Tasklet() {
+                    @Override
+                    public RepeatStatus execute(StepContribution stepContribution, ChunkContext chunkContext) throws Exception {
 
-                    long initInsertPeptides = System.currentTimeMillis();
+                        long initInsertPeptides = System.currentTimeMillis();
 
-                    Set<String> proteinIds = new HashSet<>();
-                    Set<String> peptideSequences = new HashSet<>();
+                        Set<String> proteinIds = new HashSet<>();
+                        Set<String> peptideSequences = new HashSet<>();
 
-                    List<ReportPeptide> peptides = new ArrayList<>();
-                    List<ReportProtein> proteins = new ArrayList<>();
-                    List<ReportPSM> psms = new ArrayList<>();
+                        List<ReportPeptide> peptides;
+                        List<ReportProtein> proteins;
+                        List<ReportPSM> psms = new ArrayList<>();
 
-                    if(highQualityPeptides.size() > 0 && highQualityPsms.size() > 0 && highQualityProteins.size() > 0){
-                        peptides = highQualityPeptides;
-                        proteins = highQualityProteins;
-                        psms = highQualityPsms;
-                    }else {
-                        peptides = allPeptides;
-                        proteins = allProteins;
-                        psms = allPsms;
-                    }
+                        if (highQualityPeptides.size() > 0 && highQualityPsms.size() > 0 && highQualityProteins.size() > 0) {
+                            peptides = highQualityPeptides;
+                            proteins = highQualityProteins;
+                            psms = highQualityPsms;
+                        } else {
+                            peptides = allPeptides;
+                            proteins = allProteins;
+                            psms = allPsms;
+                        }
 
-                    List<String> proteinMaps = proteins
-                            .stream().map(x -> x.getRepresentative().getAccession())
-                            .collect(Collectors.toList());
+                        List<String> proteinMaps = proteins
+                                .stream().map(x -> x.getRepresentative().getAccession())
+                                .collect(Collectors.toList());
 
-//                    ProteinDetailFetcher fetcher = new ProteinDetailFetcher();
-//                    Map<String, Protein> mappedProteins = fetcher.getProteinDetails(proteinMaps);
+                    ProteinDetailFetcher fetcher = new ProteinDetailFetcher();
+                    Map<String, Protein> mappedProteins = fetcher.getProteinDetails(proteinMaps);
 
-//                    log.info(String.valueOf(mappedProteins.size()));
+                    log.info(String.valueOf(mappedProteins.size()));
 
                     List<ReportPeptide> finalPeptides = peptides;
 
-                    proteins.forEach(protein -> {
+                        for (ReportProtein protein : proteins) {
+                            String proteinSequence = protein.getRepresentative().getDbSequence();
+                            String proteinAccession = protein.getRepresentative().getAccession();
+                        if(proteinSequence == null || proteinSequence.isEmpty()){
+                            if(mappedProteins.containsKey(proteinAccession)){
+                                proteinSequence = mappedProteins.get(proteinAccession).getSequenceString();
+                            }
+                        }
+                            Set<String> proteinGroups = protein.getAccessions()
+                                    .stream().map(Accession::getAccession)
+                                    .collect(Collectors.toSet());
 
-                        String proteinSequence = protein.getRepresentative().getDbSequence();
-                        String proteinAccession = protein.getRepresentative().getAccession();
-//                        if(proteinSequence == null || proteinSequence.isEmpty()){
-//                            if(mappedProteins.containsKey(proteinAccession)){
-//                                proteinSequence = mappedProteins.get(proteinAccession).getSequenceString();
-//                            }
-//                        }
-                        Set<String> proteinGroups = protein.getAccessions()
-                                .stream().map(Accession::getAccession)
-                                .collect(Collectors.toSet());
+                            List<IdentifiedModificationProvider> proteinPTMs = new ArrayList<>(convertProteinModifications(
+                                    proteinAccession, protein.getPeptides()));
 
-                        List<IdentifiedModificationProvider> proteinPTMs = new ArrayList<>(convertProteinModifications(
-                                proteinAccession, protein.getPeptides()));
+                            log.info(String.valueOf(protein.getQValue()));
 
-                        log.info(String.valueOf(protein.getQValue()));
+                            DefaultCvParam scoreParam = null;
+                            List<DefaultCvParam> attributes = new ArrayList<>();
 
-                        DefaultCvParam scoreParam = null;
-                        List<DefaultCvParam> attributes = new ArrayList<>();
+                            if (!Double.isFinite(protein.getQValue()) && !Double.isNaN(protein.getQValue())) {
 
-                        if(!Double.isFinite(protein.getQValue()) && !Double.isNaN(protein.getQValue())){
+                                String value = df.format(protein.getQValue());
 
-                            String value = df.format(protein.getQValue());
+                                scoreParam = new DefaultCvParam(CvTermReference.MS_PIA_PROTEIN_GROUP_QVALUE.getCvLabel(),
+                                        CvTermReference.MS_PIA_PROTEIN_GROUP_QVALUE.getAccession(),
+                                        CvTermReference.MS_PIA_PROTEIN_GROUP_QVALUE.getName(), value);
+                                attributes.add(scoreParam);
+                            }
 
-                            scoreParam = new DefaultCvParam(CvTermReference.MS_PIA_PROTEIN_GROUP_QVALUE.getCvLabel(),
-                                    CvTermReference.MS_PIA_PROTEIN_GROUP_QVALUE.getAccession(),
-                                    CvTermReference.MS_PIA_PROTEIN_GROUP_QVALUE.getName(), value);
-                            attributes.add(scoreParam);
+                            if (protein.getScore() != null && !protein.getScore().isNaN()) {
+                                String value = df.format(protein.getScore());
+                                scoreParam = new DefaultCvParam(CvTermReference.MS_PIA_PROTEIN_SCORE.getCvLabel(),
+                                        CvTermReference.MS_PIA_PROTEIN_SCORE.getAccession(),
+                                        CvTermReference.MS_PIA_PROTEIN_SCORE.getName(), value);
+                                attributes.add(scoreParam);
+                            }
+
+
+                            proteinIds.add(proteinAccession);
+                            protein.getPeptides().forEach(x -> peptideSequences.add(x.getSequence()));
+
+                            PrideMongoProteinEvidence proteinEvidence = PrideMongoProteinEvidence
+                                    .builder()
+                                    .reportedAccession(proteinAccession)
+                                    .isDecoy(protein.getIsDecoy())
+                                    .proteinGroupMembers(proteinGroups)
+                                    .ptms(proteinPTMs)
+                                    .projectAccession(projectAccession)
+                                    .proteinSequence(proteinSequence)
+                                    .bestSearchEngineScore(scoreParam)
+                                    .additionalAttributes(attributes)
+                                    .assayAccession(assay.getAccession())
+                                    .isValid(isValid)
+                                    .qualityEstimationMethods(validationMethods)
+                                    .numberPeptides(protein.getPeptides().size())
+                                    .numberPSMs(protein.getNrPSMs())
+                                    .sequenceCoverage(protein.getCoverage(proteinAccession))
+                                    .build();
+
+                            try {
+                                BackupUtil.backupPrideMongoProteinEvidence(proteinEvidence, backupPath);
+                                 moleculesService.insertProteinEvidences(proteinEvidence);
+                            } catch (DuplicateKeyException ex) {
+                                 moleculesService.saveProteinEvidences(proteinEvidence);
+                                log.debug("The protein was already in the database -- " + proteinEvidence.getReportedAccession());
+                            } catch (Exception e) {
+                                log.error(e.getMessage(), e);
+                                throw new Exception(e);
+                            }
+                            indexPeptideByProtein(protein, finalPeptides);
+
                         }
 
-                        if(protein.getScore() != null && !protein.getScore().isNaN()){
-                            String value = df.format(protein.getScore());
-                            scoreParam = new DefaultCvParam(CvTermReference.MS_PIA_PROTEIN_SCORE.getCvLabel(),
-                                    CvTermReference.MS_PIA_PROTEIN_SCORE.getAccession(),
-                                    CvTermReference.MS_PIA_PROTEIN_SCORE.getName(), value);
-                            attributes.add(scoreParam);
-                        }
+                        taskTimeMap.put("InsertPeptidesProteinsIntoMongoDB", System.currentTimeMillis() - initInsertPeptides);
 
-
-
-                        proteinIds.add(proteinAccession);
-                        protein.getPeptides().forEach(x -> peptideSequences.add(x.getSequence()));
-
-                        PrideMongoProteinEvidence proteinEvidence = PrideMongoProteinEvidence
-                                .builder()
-                                .reportedAccession(proteinAccession)
-                                .isDecoy(protein.getIsDecoy())
-                                .proteinGroupMembers(proteinGroups)
-                                .ptms(proteinPTMs)
-                                .projectAccession(projectAccession)
-                                .proteinSequence(proteinSequence)
-                                .bestSearchEngineScore(scoreParam)
-                                .additionalAttributes(attributes)
-                                .assayAccession(assay.getAccession())
-                                .isValid(isValid)
-                                .qualityEstimationMethods(validationMethods)
-                                .numberPeptides(protein.getPeptides().size())
-                                .numberPSMs(protein.getNrPSMs())
-                                .sequenceCoverage(protein.getCoverage(proteinAccession))
-                                .build();
-
-                        try {
-                            BackupUtil.backupPrideMongoProteinEvidence(proteinEvidence);
-                           // moleculesService.insertProteinEvidences(proteinEvidence);
-                        } catch (DuplicateKeyException ex){
-                           // moleculesService.saveProteinEvidences(proteinEvidence);
-                            log.debug("The protein was already in the database -- " + proteinEvidence.getReportedAccession());
-                        }
-
-                        indexPeptideByProtein(protein, finalPeptides);
-
-                    });
-
-                    taskTimeMap.put("InsertPeptidesProteinsIntoMongoDB", System.currentTimeMillis() - initInsertPeptides);
-
-                    return RepeatStatus.FINISHED;
+                        return RepeatStatus.FINISHED;
+                    }
                 }).build();
     }
 
@@ -399,18 +406,17 @@ public class PRIDEAnalyzeAssayJob extends AbstractArchiveJob {
      * @param protein Identified Protein
      * @param peptides Collection of identified highQualityPeptides in the experiment
      */
-    private void indexPeptideByProtein(ReportProtein protein, List<ReportPeptide> peptides) {
+    private void indexPeptideByProtein(ReportProtein protein, List<ReportPeptide> peptides) throws Exception {
 
-        protein.getPeptides().forEach( peptide -> {
-
+        for (ReportPeptide peptide : protein.getPeptides()) {
             Optional<ReportPeptide> firstPeptide = peptides.stream()
                     .filter(globalPeptide -> globalPeptide.getStringID().equalsIgnoreCase(peptide.getStringID()))
                     .findFirst();
 
-            if(firstPeptide.isPresent()){
+            if (firstPeptide.isPresent()) {
 
                 List<DefaultCvParam> peptideAttributes = new ArrayList<>();
-                if(!Double.isInfinite(firstPeptide.get().getQValue()) && !Double.isNaN(firstPeptide.get().getQValue())){
+                if (!Double.isInfinite(firstPeptide.get().getQValue()) && !Double.isNaN(firstPeptide.get().getQValue())) {
 
                     String value = df.format(firstPeptide.get().getQValue());
 
@@ -422,8 +428,8 @@ public class PRIDEAnalyzeAssayJob extends AbstractArchiveJob {
                 }
 
 
-                if(!Double.isInfinite(firstPeptide.get().getScore("peptide_fdr_score"))
-                        && !Double.isNaN(firstPeptide.get().getScore("peptide_fdr_score"))){
+                if (!Double.isInfinite(firstPeptide.get().getScore("peptide_fdr_score"))
+                        && !Double.isNaN(firstPeptide.get().getScore("peptide_fdr_score"))) {
 
                     String value = df.format(firstPeptide.get().getScore("peptide_fdr_score"));
 
@@ -434,7 +440,7 @@ public class PRIDEAnalyzeAssayJob extends AbstractArchiveJob {
                     peptideAttributes.add(peptideScore);
                 }
 
-                if(protein.getRepresentative().getAccession().equalsIgnoreCase("DECOY_ECA0723"))
+                if (protein.getRepresentative().getAccession().equalsIgnoreCase("DECOY_ECA0723"))
                     System.out.println(protein.getRepresentative().getAccession());
 
                 List<PeptideSpectrumOverview> usiList = peptideUsi.get(firstPeptide.get().getPeptide().getID());
@@ -445,10 +451,10 @@ public class PRIDEAnalyzeAssayJob extends AbstractArchiveJob {
                 Optional<AccessionOccurrence> occurrence = firstPeptide.get().getPeptide().getAccessionOccurrences().stream()
                         .filter(x -> x.getAccession().getAccession().equalsIgnoreCase(protein.getRepresentative().getAccession()))
                         .findFirst();
-                if(occurrence.isPresent()){
+                if (occurrence.isPresent()) {
                     startPosition = occurrence.get().getStart();
                     endPosition = occurrence.get().getEnd();
-                }else{
+                } else {
                     log.info("Position of the corresponding peptide is not present -- " + protein.getRepresentative().getAccession());
                 }
 
@@ -471,14 +477,17 @@ public class PRIDEAnalyzeAssayJob extends AbstractArchiveJob {
                         .qualityEstimationMethods(validationMethods)
                         .build();
                 try {
-                    BackupUtil.backupPrideMongoPeptideEvidence(peptideEvidence);
-                  //  moleculesService.insertPeptideEvidence(peptideEvidence);
-                } catch (DuplicateKeyException ex){
-                   // moleculesService.savePeptideEvidence(peptideEvidence);
+                    BackupUtil.backupPrideMongoPeptideEvidence(peptideEvidence, backupPath);
+                      moleculesService.insertPeptideEvidence(peptideEvidence);
+                } catch (DuplicateKeyException ex) {
+                     moleculesService.savePeptideEvidence(peptideEvidence);
                     log.debug("The peptide evidence was already in the database -- " + peptideEvidence.getPeptideAccession());
+                } catch (Exception e) {
+                    log.error(e.getMessage(), e);
+                    throw new Exception(e);
                 }
             }
-        });
+        }
 
     }
 
