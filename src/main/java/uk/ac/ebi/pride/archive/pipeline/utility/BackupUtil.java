@@ -5,13 +5,10 @@ import com.fasterxml.jackson.module.paranamer.ParanamerModule;
 import uk.ac.ebi.pride.mongodb.molecules.model.peptide.PrideMongoPeptideEvidence;
 import uk.ac.ebi.pride.mongodb.molecules.model.protein.PrideMongoProteinEvidence;
 
-import java.io.File;
-import java.io.IOException;
-import java.nio.file.AccessDeniedException;
+import java.io.*;
+import java.util.ArrayList;
+import java.util.List;
 
-/**
- * @author Suresh Hewapathirana
- */
 public class BackupUtil {
 
     private static final ObjectMapper objectMapper;
@@ -22,57 +19,53 @@ public class BackupUtil {
         objectMapper.registerModule(new ParanamerModule());
     }
 
-    public static void backupPrideMongoProteinEvidence(PrideMongoProteinEvidence prideMongoProteinEvidence, String backupPath) throws Exception {
-        backupPath = createBackupDir(backupPath, prideMongoProteinEvidence.getProjectAccession());
-        String filename = prideMongoProteinEvidence.getProjectAccession() + "_" + prideMongoProteinEvidence.getAssayAccession() + "_" + PrideMongoProteinEvidence.class.getName() + JSON_EXT;
-        String backupLocation = backupPath + File.separator + filename;
-        objectMapper.writeValue(new File(backupLocation), prideMongoProteinEvidence);
+    public static void write(Object obj, BufferedWriter bw) throws Exception {
+        String s = objectMapper.writeValueAsString(obj);
+        bw.write(s);
+        bw.newLine();
     }
 
-    public static void backupPrideMongoPeptideEvidence(PrideMongoPeptideEvidence prideMongoPeptideEvidence, String backupPath)  throws Exception {
-        backupPath = createBackupDir(backupPath, prideMongoPeptideEvidence.getProjectAccession());
-        String filename = prideMongoPeptideEvidence.getProjectAccession() + "_" + prideMongoPeptideEvidence.getAssayAccession() + "_" + PrideMongoPeptideEvidence.class.getName() + JSON_EXT;
-        String backupLocation = backupPath + File.separator + filename;
-        objectMapper.writeValue(new File(backupLocation), prideMongoPeptideEvidence);
-    }
-
-    private static String createBackupDir(String backupPath, String projectAccession) throws AccessDeniedException {
+    public static String getPrideMongoProteinEvidenceFile(String backupPath, String projectAccession, String assayAccession) {
         if (!backupPath.endsWith(File.separator)) {
             backupPath = backupPath + File.separator;
         }
-        backupPath = backupPath + projectAccession;
-        File file = new File(backupPath);
-        if(file.exists() && file.isDirectory()) {
-            return backupPath;
-        }
-        boolean mkdirs = file.mkdirs();
-        if (!mkdirs) {
-            throw new AccessDeniedException("Failed to create Dir : " + backupPath);
-        }
-        return backupPath;
+        return backupPath + projectAccession + File.separator + projectAccession + "_" + assayAccession +
+                "_" + PrideMongoProteinEvidence.class.getSimpleName() + JSON_EXT;
     }
 
-    public static PrideMongoProteinEvidence getPrideMongoProteinEvidenceFromBackup(String projectAccession, String assayAccession, String backupPath) {
-        PrideMongoProteinEvidence prideMongoProteinEvidence = null;
-        File file = new File(backupPath + File.separator + projectAccession + File.separator + projectAccession +  "_" + assayAccession + "_" + PrideMongoProteinEvidence.class.getName() + JSON_EXT);
-        try {
-            prideMongoProteinEvidence = objectMapper.readValue(file, PrideMongoProteinEvidence.class);
-        } catch (IOException e) {
-            e.printStackTrace();
+    public static String getPrideMongoPeptideEvidenceFile(String backupPath, String projectAccession, String assayAccession) {
+        if (!backupPath.endsWith(File.separator)) {
+            backupPath = backupPath + File.separator;
         }
-
-        return prideMongoProteinEvidence;
+        return backupPath + projectAccession + File.separator + projectAccession + "_" + assayAccession +
+                "_" + PrideMongoPeptideEvidence.class.getSimpleName() + JSON_EXT;
     }
 
-    public static PrideMongoPeptideEvidence getPrideMongoPeptideEvidenceFromBackup(String projectAccession, String assayAccession, String backupPath) {
-        PrideMongoPeptideEvidence prideMongoProteinEvidence = null;
-        File file = new File(backupPath + File.separator + projectAccession + File.separator + projectAccession + "_" + assayAccession + "_" + PrideMongoPeptideEvidence.class.getName() + JSON_EXT);
-        try {
-            prideMongoProteinEvidence = objectMapper.readValue(file, PrideMongoPeptideEvidence.class);
-        } catch (IOException e) {
-            e.printStackTrace();
-        }
+    public static List<PrideMongoProteinEvidence> getPrideMongoProteinEvidenceFromBackup(String backupPath, String projectAccession, String assayAccession) throws IOException {
+        List<PrideMongoProteinEvidence> prideMongoProteinEvidences = new ArrayList<>();
+        BufferedReader reader;
+            reader = new BufferedReader(new FileReader(getPrideMongoProteinEvidenceFile(backupPath, projectAccession, assayAccession)));
+            String line = reader.readLine();
+            while (line != null) {
+                prideMongoProteinEvidences.add(objectMapper.readValue(line, PrideMongoProteinEvidence.class));
+                line = reader.readLine();
+            }
+            reader.close();
 
-        return prideMongoProteinEvidence;
+        return prideMongoProteinEvidences;
+    }
+
+    public static List<PrideMongoPeptideEvidence> getPrideMongoPeptideEvidenceFromBackup(String backupPath, String projectAccession, String assayAccession) throws IOException {
+        List<PrideMongoPeptideEvidence> prideMongoPeptideEvidences = new ArrayList<>();
+        BufferedReader reader;
+        reader = new BufferedReader(new FileReader(getPrideMongoPeptideEvidenceFile(backupPath, projectAccession, assayAccession)));
+        String line = reader.readLine();
+        while (line != null) {
+            prideMongoPeptideEvidences.add(objectMapper.readValue(line, PrideMongoPeptideEvidence.class));
+            line = reader.readLine();
+        }
+        reader.close();
+
+        return prideMongoPeptideEvidences;
     }
 }
