@@ -82,6 +82,9 @@ public class SyncMissingProjectsWithMongoJob extends AbstractArchiveJob{
               final Set<String> oracleProjectAccessions = getOracleProjectAccessions();
               final Set<String> mongoDBProjectAccessions = getMongoProjectAccessions();
 
+              log.info("Number of projects in Oracle DB: " + oracleProjectAccessions.size());
+              log.info("Number of projects in Mongo DB : " + mongoDBProjectAccessions.size());
+
               Set<String> oracleProjectAccessionsMongoCopy = new HashSet<>();
               Set<String> mongoDBProjectAccessionsCopy = new HashSet<>();
 
