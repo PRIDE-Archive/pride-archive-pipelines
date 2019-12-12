@@ -6,17 +6,21 @@ import org.springframework.batch.core.Job;
 import org.springframework.batch.core.Step;
 import org.springframework.batch.repeat.RepeatStatus;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.context.annotation.Bean;
-import org.springframework.context.annotation.Configuration;
-import org.springframework.context.annotation.Import;
-import org.springframework.context.annotation.PropertySource;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.context.annotation.*;
 import org.springframework.web.client.RestTemplate;
+import uk.ac.ebi.pride.archive.pipeline.command.runner.CommandRunner;
 import uk.ac.ebi.pride.archive.pipeline.configuration.ArchiveOracleConfig;
+import uk.ac.ebi.pride.archive.pipeline.configuration.CommandConfig;
+import uk.ac.ebi.pride.archive.pipeline.configuration.DataSourceConfiguration;
 import uk.ac.ebi.pride.archive.pipeline.jobs.AbstractArchiveJob;
 import uk.ac.ebi.pride.archive.pipeline.utility.SubmissionPipelineConstants;
 import uk.ac.ebi.pride.archive.repo.repos.project.Project;
 import uk.ac.ebi.pride.archive.repo.repos.project.ProjectRepository;
+import uk.ac.ebi.pride.integration.command.builder.CommandBuilder;
+import uk.ac.ebi.pride.integration.command.builder.DefaultCommandBuilder;
 
+import java.util.Collection;
 import java.util.HashSet;
 import java.util.Set;
 import java.util.stream.Collectors;
@@ -28,11 +32,17 @@ import java.util.stream.StreamSupport;
 @Configuration
 @Slf4j
 @PropertySource("classpath:application.properties")
-@Import({ArchiveOracleConfig.class})
-public class SyncMissingProjectsWithPCJob extends AbstractArchiveJob {
+@Import({ArchiveOracleConfig.class,  DataSourceConfiguration.class, CommandConfig.class})
+public class SyncMissingProjectsWithProteomeXJob extends AbstractArchiveJob {
 
     @Autowired
-    ProjectRepository oracleProjectRepository;
+    ProjectRepository oracleRepository;
+
+    @Value("${command.update.pxxml.command}")
+    private String assayAnalyseCommand;
+
+    @Autowired
+    private CommandRunner commandRunner;
 
     /**
      * Defines the job to Sync all missing public projects from OracleDB into ProteomeXchange database.
@@ -40,26 +50,30 @@ public class SyncMissingProjectsWithPCJob extends AbstractArchiveJob {
      * @return the  job
      */
     @Bean
-    public Job syncMissingProjectsOracleToPCJob() {
+    public Job syncMissingProjectsOracleToPXJob() {
         return jobBuilderFactory
                 .get(SubmissionPipelineConstants.PrideArchiveJobNames.PRIDE_ARCHIVE_SYNC_MISSING_PROJECTS_ORACLE_PC.getName())
-                .start(syncMissingProjectsOracleToPC())
+                .start(syncMissingProjectsOracleToPXStep())
                 .build();
     }
 
     @Bean
-    Step syncMissingProjectsOracleToPC() {
+    Step syncMissingProjectsOracleToPXStep() {
         return stepBuilderFactory
                 .get(SubmissionPipelineConstants.PrideArchiveStepNames.PRIDE_ARCHIVE_MISSING_PROJ_ORACLE_TO_PC_SYNC.name())
                 .tasklet(
                         (stepContribution, chunkContext) -> {
-
-                            Set<String> pcPublicAccessions = getProteomXchangeData();
+                            Set<String> pxPublicAccessions = getProteomXchangeData();
+                            System.out.println("Number of ProteomeXchange projects: " + pxPublicAccessions.size());
                             Set<String> oraclePublicAccessions = getOracleProjectAccessions();
+                            System.out.println("Number of oraclePublicAccessions projects: " + oraclePublicAccessions.size());
 
                             for (String prideAccession : oraclePublicAccessions) {
-                                if(!pcPublicAccessions.contains(prideAccession)){
-                                    System.out.println( prideAccession + " is not public on ProteomeXchange");
+                                if(!pxPublicAccessions.contains(prideAccession)){
+                                    if (!prideAccession.startsWith("PRD")) {
+                                        System.out.println(prideAccession + " is not public on ProteomeXchange");
+                                        runCommand(prideAccession);
+                                    }
                                 }
                             }
                             return RepeatStatus.FINISHED;
@@ -78,10 +92,12 @@ public class SyncMissingProjectsWithPCJob extends AbstractArchiveJob {
         String[] recordsTemp = records.split("GetDataset\\?ID=");
         for (int i = 1; i < recordsTemp.length; i++) {
             String accession = recordsTemp[i].split("\" target")[0];
-            if (accession.startsWith("PXD")) {
-                accessions.add(accession.substring(0, 9));
-            } else {
-                accessions.add(accession.substring(0, 10));
+            if (!accession.startsWith("PRD")) {
+                if (accession.startsWith("PXD")) {
+                    accessions.add(accession.substring(0, 9));
+                } else {
+                    accessions.add(accession.substring(0, 10));
+                }
             }
         }
         return accessions;
@@ -95,7 +111,7 @@ public class SyncMissingProjectsWithPCJob extends AbstractArchiveJob {
      */
     private Set<String> getOracleProjectAccessions(){
 
-        Iterable<Project> oracleAllProjects = oracleProjectRepository.findAll();
+        Iterable<Project> oracleAllProjects = oracleRepository.findAll();
         Set<String> oracleAccessions = StreamSupport.stream(oracleAllProjects.spliterator(), false)
                 .filter(Project::isPublicProject)
                 .map(Project::getAccession)
@@ -105,4 +121,20 @@ public class SyncMissingProjectsWithPCJob extends AbstractArchiveJob {
         return oracleAccessions;
     }
 
+    /**
+     * Run command to launch job to lsf
+     */
+    private void runCommand(String accession) {
+
+        CommandBuilder commandBuilder = new DefaultCommandBuilder();
+
+        commandBuilder.argument(assayAnalyseCommand);
+        // append project accession
+        commandBuilder.argument("-a", accession);
+
+        Collection<String> command = commandBuilder.getCommand();
+        System.out.println(command.toString());
+
+        commandRunner.run(command);
+    }
 }

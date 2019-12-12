@@ -16,17 +16,19 @@ import org.springframework.test.context.TestPropertySource;
 import org.springframework.test.context.junit4.SpringJUnit4ClassRunner;
 import uk.ac.ebi.pride.archive.pipeline.configuration.JobRunnerTestConfiguration;
 
+import java.util.UUID;
+
 /**
  * @author Suresh Hewapathirana
  */
 @RunWith(SpringJUnit4ClassRunner.class)
-@ContextConfiguration(classes = {SyncMissingProjectsWithPCJob.class, JobRunnerTestConfiguration.class})
+@ContextConfiguration(classes = {SyncMissingProjectsWithProteomeXJob.class, JobRunnerTestConfiguration.class})
 @TestPropertySource(value = "classpath:application-test.properties")
 @Slf4j
-public class SyncMissingProjectsWithPCJobTest {
+public class SyncMissingProjectsWithProteomeXJobTest {
 
     @Autowired
-    SyncMissingProjectsWithPCJob syncMissingProjectsWithPCJob;
+    SyncMissingProjectsWithProteomeXJob syncMissingProjectsWithProteomeXJob;
 
     @Autowired
     private JobLauncherTestUtils jobLauncherTestUtils;
@@ -36,9 +38,9 @@ public class SyncMissingProjectsWithPCJobTest {
      * @throws Exception
      */
     @Test
-    public void syncMissingProjectsOracleToMongoDB() throws Exception {
+    public void syncMissingProjectsOracleToPXTest() throws Exception {
         JobParameters param = new JobParametersBuilder()
-                .toJobParameters();
+        .addString("instance_id", UUID.randomUUID().toString(), true).toJobParameters();
         JobExecution jobExecution = jobLauncherTestUtils.launchJob(param);
         Assert.assertEquals(BatchStatus.COMPLETED.name(), jobExecution.getExitStatus().getExitCode());
     }
