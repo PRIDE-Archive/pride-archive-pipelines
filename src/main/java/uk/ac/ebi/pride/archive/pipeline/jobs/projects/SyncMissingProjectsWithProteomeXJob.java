@@ -9,9 +9,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.*;
 import org.springframework.web.client.RestTemplate;
-import uk.ac.ebi.pride.archive.pipeline.command.runner.CommandRunner;
 import uk.ac.ebi.pride.archive.pipeline.configuration.ArchiveOracleConfig;
-import uk.ac.ebi.pride.archive.pipeline.configuration.CommandConfig;
 import uk.ac.ebi.pride.archive.pipeline.configuration.DataSourceConfiguration;
 import uk.ac.ebi.pride.archive.pipeline.jobs.AbstractArchiveJob;
 import uk.ac.ebi.pride.archive.pipeline.utility.SubmissionPipelineConstants;
@@ -19,6 +17,7 @@ import uk.ac.ebi.pride.archive.repo.repos.project.Project;
 import uk.ac.ebi.pride.archive.repo.repos.project.ProjectRepository;
 import uk.ac.ebi.pride.integration.command.builder.CommandBuilder;
 import uk.ac.ebi.pride.integration.command.builder.DefaultCommandBuilder;
+import uk.ac.ebi.pride.integration.command.runner.CommandRunner;
 
 import java.util.Collection;
 import java.util.HashSet;
@@ -32,7 +31,8 @@ import java.util.stream.StreamSupport;
 @Configuration
 @Slf4j
 @PropertySource("classpath:application.properties")
-@Import({ArchiveOracleConfig.class,  DataSourceConfiguration.class, CommandConfig.class})
+@Import({ArchiveOracleConfig.class,  DataSourceConfiguration.class})
+@ImportResource({"classpath*:/META-INF/spring/integration/common-context.xml"})
 public class SyncMissingProjectsWithProteomeXJob extends AbstractArchiveJob {
 
     @Autowired
