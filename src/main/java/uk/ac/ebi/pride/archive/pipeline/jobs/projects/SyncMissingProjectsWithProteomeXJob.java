@@ -41,6 +41,9 @@ public class SyncMissingProjectsWithProteomeXJob extends AbstractArchiveJob {
     @Value("${command.update.pxxml.command}")
     private String assayAnalyseCommand;
 
+    @Value("${proteome.exchange.url}")
+    private String proteomeXchangeURL;
+
     @Autowired
     private CommandRunner commandRunner;
 
@@ -64,14 +67,14 @@ public class SyncMissingProjectsWithProteomeXJob extends AbstractArchiveJob {
                 .tasklet(
                         (stepContribution, chunkContext) -> {
                             Set<String> pxPublicAccessions = getProteomXchangeData();
-                            System.out.println("Number of ProteomeXchange projects: " + pxPublicAccessions.size());
+                            log.info("Number of ProteomeXchange projects: " + pxPublicAccessions.size());
                             Set<String> oraclePublicAccessions = getOracleProjectAccessions();
-                            System.out.println("Number of oraclePublicAccessions projects: " + oraclePublicAccessions.size());
+                            log.info("Number of oraclePublicAccessions projects: " + oraclePublicAccessions.size());
 
                             for (String prideAccession : oraclePublicAccessions) {
                                 if(!pxPublicAccessions.contains(prideAccession)){
                                     if (!prideAccession.startsWith("PRD")) {
-                                        System.out.println(prideAccession + " is not public on ProteomeXchange");
+                                        log.info(prideAccession + " is not public on ProteomeXchange");
                                         runCommand(prideAccession);
                                     }
                                 }
@@ -83,7 +86,7 @@ public class SyncMissingProjectsWithProteomeXJob extends AbstractArchiveJob {
 
     private Set<String> getProteomXchangeData() {
 
-        final String URI = "http://proteomecentral.proteomexchange.org/cgi/GetDataset?outputMode=json";
+        final String URI = proteomeXchangeURL;
 
         Set<String> accessions = new HashSet<>();
 
@@ -117,7 +120,7 @@ public class SyncMissingProjectsWithProteomeXJob extends AbstractArchiveJob {
                 .map(Project::getAccession)
                 .collect(Collectors.toSet());
 
-        System.out.println( "Number of Oracle projects: "+ oracleAccessions.size());
+        log.info( "Number of Oracle projects: "+ oracleAccessions.size());
         return oracleAccessions;
     }
 
@@ -133,7 +136,7 @@ public class SyncMissingProjectsWithProteomeXJob extends AbstractArchiveJob {
         commandBuilder.argument("-a", accession);
 
         Collection<String> command = commandBuilder.getCommand();
-        System.out.println(command.toString());
+        log.info(command.toString());
 
         commandRunner.run(command);
     }

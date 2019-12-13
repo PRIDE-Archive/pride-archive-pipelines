@@ -79,12 +79,11 @@ public class SyncMissingProjectsWithMongoJob extends AbstractArchiveJob{
         .tasklet(
             (stepContribution, chunkContext) -> {
 
-              System.out.println("Comparing accessions...");
               final Set<String> oracleProjectAccessions = getOracleProjectAccessions();
               final Set<String> mongoDBProjectAccessions = getMongoProjectAccessions();
 
-              System.out.println("Number of projects in Oracle DB: " + oracleProjectAccessions.size());
-              System.out.println("Number of projects in Mongo DB : " + mongoDBProjectAccessions.size());
+              log.info("Number of projects in Oracle DB: " + oracleProjectAccessions.size());
+              log.info("Number of projects in Mongo DB : " + mongoDBProjectAccessions.size());
 
               Set<String> oracleProjectAccessionsMongoCopy = new HashSet<>();
               Set<String> mongoDBProjectAccessionsCopy = new HashSet<>();
@@ -94,12 +93,12 @@ public class SyncMissingProjectsWithMongoJob extends AbstractArchiveJob{
 
               // get list of accessions missing in mongoDB
               oracleProjectAccessionsMongoCopy.removeAll(mongoDBProjectAccessions);
-              System.out.println("List of accessions missing in MongoDB: " + oracleProjectAccessionsMongoCopy.toString());
+              log.info("List of accessions missing in MongoDB: " + oracleProjectAccessionsMongoCopy.toString());
               notifyToMessagingQueue(oracleProjectAccessionsMongoCopy, true);
 
               // get list of accessions missing in in Oracle due to reset or mistakenly added to Mongo
               mongoDBProjectAccessionsCopy.removeAll(oracleProjectAccessions);
-              System.out.println("List of accessions mistakenly added to MongoDB: " + mongoDBProjectAccessionsCopy.toString());
+              log.info("List of accessions mistakenly added to MongoDB: " + mongoDBProjectAccessionsCopy.toString());
               notifyToMessagingQueue(mongoDBProjectAccessionsCopy, false);
 
               return RepeatStatus.FINISHED;
