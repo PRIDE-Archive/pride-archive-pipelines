@@ -197,10 +197,10 @@ public class SaveSdrfToBioSamplesAndMongoJob extends AbstractArchiveJob {
      This method is to check whether the project is being republished with same sdrf.
      */
     private boolean checkFilesAlreadySaved(String fileChecksum, String projectAccession) {
-        Set<String> fileChecksums = prideSdrfMongoService.getUniqueFileChecksumsOfProject(projectAccession);
+        /*Set<String> fileChecksums = prideSdrfMongoService.getUniqueFileChecksumsOfProject(projectAccession);
         if (fileChecksums.contains(fileChecksum)) {
             return true;
-        }
+        }*/
         return false;
     }
 
