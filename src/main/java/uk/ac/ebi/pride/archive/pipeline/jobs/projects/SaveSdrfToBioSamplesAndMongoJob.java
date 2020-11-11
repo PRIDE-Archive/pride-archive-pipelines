@@ -34,6 +34,7 @@ import uk.ac.ebi.pride.mongodb.archive.service.sdrf.PrideSdrfMongoService;
 
 import java.io.BufferedReader;
 import java.io.File;
+import java.io.IOException;
 import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.nio.file.Files;
@@ -168,7 +169,6 @@ public class SaveSdrfToBioSamplesAndMongoJob extends AbstractArchiveJob {
 
     private Tasklet readTsvTasklet() {
         return (stepContribution, chunkContext) -> {
-            Map<String, Tuple<String, List<Record>>> sdrfContentsToProcess = new HashMap<>();
             TsvParserSettings tsvParserSettings = new TsvParserSettings();
             tsvParserSettings.setNullValue("not available");
             Files.walk(Paths.get(projectsSdrfFolder), Integer.MAX_VALUE).skip(1).forEach(file -> {
@@ -179,13 +179,18 @@ public class SaveSdrfToBioSamplesAndMongoJob extends AbstractArchiveJob {
                         String fileChecksum = HashUtils.getSha1Checksum(file.toFile());
                         if (!checkFilesAlreadySaved(fileChecksum, accession)) {
                             TsvParser tsvParser = new TsvParser(tsvParserSettings);
+                            Map<String, Tuple<String, List<Record>>> sdrfContentsToProcess
+                             = accessionToSdrfContents.get(accession);
+                            if(sdrfContentsToProcess == null){
+                                sdrfContentsToProcess = new HashMap<>();
+                            }
                             sdrfContentsToProcess.put(fileChecksum, new Tuple(fileName,
                                     tsvParser.parseAllRecords(file.toFile())));
+                            accessionToSdrfContents.put(accession, sdrfContentsToProcess);
                         }
                     } catch (Exception e) {
                         throw new RuntimeException("Error in calculating checksum");
                     }
-                    accessionToSdrfContents.put(accession, sdrfContentsToProcess);
                 }
             });
             return RepeatStatus.FINISHED;
