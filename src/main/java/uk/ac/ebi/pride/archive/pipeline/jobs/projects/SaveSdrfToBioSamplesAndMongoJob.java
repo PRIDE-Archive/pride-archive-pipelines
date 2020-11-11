@@ -34,7 +34,6 @@ import uk.ac.ebi.pride.mongodb.archive.service.sdrf.PrideSdrfMongoService;
 
 import java.io.BufferedReader;
 import java.io.File;
-import java.io.IOException;
 import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.nio.file.Files;
@@ -75,8 +74,8 @@ public class SaveSdrfToBioSamplesAndMongoJob extends AbstractArchiveJob {
     @Value(("${github.folder.path}"))
     private String githubFolderPath;
 
-   /* @Autowired
-    private BioSamplesClient bioSamplesClient;*/
+    @Autowired
+    private BioSamplesClient bioSamplesClient;
 
     @Autowired
     private PrideSdrfMongoService prideSdrfMongoService;
@@ -175,6 +174,9 @@ public class SaveSdrfToBioSamplesAndMongoJob extends AbstractArchiveJob {
                 String fileName = file.getFileName().toString();
                 if (fileName.endsWith(".tsv")) {
                     String accession = file.getParent().getFileName().toString();
+                    if(!prideProjectMongoService.findByAccession(accession).isPresent()){
+                        return;
+                    }
                     try {
                         String fileChecksum = HashUtils.getSha1Checksum(file.toFile());
                         if (!checkFilesAlreadySaved(fileChecksum, accession)) {
@@ -202,10 +204,10 @@ public class SaveSdrfToBioSamplesAndMongoJob extends AbstractArchiveJob {
      This method is to check whether the project is being republished with same sdrf.
      */
     private boolean checkFilesAlreadySaved(String fileChecksum, String projectAccession) {
-        /*Set<String> fileChecksums = prideSdrfMongoService.getUniqueFileChecksumsOfProject(projectAccession);
+        Set<String> fileChecksums = prideSdrfMongoService.getUniqueFileChecksumsOfProject(projectAccession);
         if (fileChecksums.contains(fileChecksum)) {
             return true;
-        }*/
+        }
         return false;
     }
 
@@ -239,23 +241,22 @@ public class SaveSdrfToBioSamplesAndMongoJob extends AbstractArchiveJob {
                 String sampleChecksum = HashUtils.getSha256Checksum(sampleName + sample.getAttributes().toString());
                 String sampleAccession = "";
                 if (!sampleChecksumAccession.containsKey(sampleChecksum)) {
-                 /*   Resource<Sample> sampleResource = bioSamplesClient.persistSampleResource(sample);
-                    sampleAccession = sampleResource.getContent().getAccession();*//*
-                    sampleChecksumAccession.put(sampleChecksum, sampleAccession);*/
-                    System.out.println("Error Sample not found");
+                    Resource<Sample> sampleResource = bioSamplesClient.persistSampleResource(sample);
+                    sampleAccession = sampleResource.getContent().getAccession();
+                    sampleChecksumAccession.put(sampleChecksum, sampleAccession);
                 } else {
                     sampleAccession = sampleChecksumAccession.get(sampleChecksum);
                 }
-                /*Map<String, String> sampleToSave = createSample(headers, sdrfRecord, sampleAccession, sampleChecksum);
+                Map<String, String> sampleToSave = createSample(headers, sdrfRecord, sampleAccession, sampleChecksum);
                 sampleToSave.put(headers[0], sampleName);
-                saveSamplesToMongo(accession, fileChecksum, sampleToSave);*/
+                saveSamplesToMongo(accession, fileChecksum, sampleToSave);
                 saveRowToFile(tsvWriter, sdrfRecord, sampleName, sampleChecksum, sampleAccession);
             }
             tsvWriter.close();
         }
-       /* if (samplesToSave.size() > 0) {
+        if (samplesToSave.size() > 0) {
             prideSdrfMongoService.saveSdrfList(samplesToSave);
-        }*/
+        }
     }
 
     private void saveRowToFile(TsvWriter tsvWriter, Record sdrfRecord, String sampleName, String sampleChecksum, String sampleAccession) {
@@ -322,7 +323,7 @@ public class SaveSdrfToBioSamplesAndMongoJob extends AbstractArchiveJob {
     }
 
 
-    /*private Map<String, String> createSample(String headers[], Record sdrfObject, String sampleAccession, String sampleChecksum) {
+    private Map<String, String> createSample(String headers[], Record sdrfObject, String sampleAccession, String sampleChecksum) {
         Set<String> columnNames = new HashSet<>();
         int count = 1;
         Map<String, String> sample = new HashMap<>();
@@ -350,5 +351,5 @@ public class SaveSdrfToBioSamplesAndMongoJob extends AbstractArchiveJob {
             prideSdrfMongoService.saveSdrfList(samplesToSave);
             samplesToSave.clear();
         }
-    }*/
+    }
 }
