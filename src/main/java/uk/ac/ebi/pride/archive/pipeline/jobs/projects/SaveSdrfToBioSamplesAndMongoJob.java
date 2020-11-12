@@ -298,7 +298,7 @@ public class SaveSdrfToBioSamplesAndMongoJob extends AbstractArchiveJob {
         try {
             log.info("Appending Readme file" + readmeFile.getPath());
             FileUtils.write(readmeFile, sdrfDataFile.getFileId() + "\t" + sdrfDataFile.getFileName() + "\t" +
-                    sdrfDataFile.getFilePath().replace(prideRepoRootPath, ftpProtocolUrl) + "\t"
+                    sdrfDataFile.getFilePath().replace(prideRepoRootPath, ftpProtocolUrl + File.separator) + "\t"
                     + sdrfDataFile.getFileType() + "\t-\n", Charset.defaultCharset(), true);
             Process cpReadme = Runtime.getRuntime().exec(BECOME_PRIDE_ADM_CP + readmeFile.getAbsolutePath()
                     +" "+ readmeFile.getAbsolutePath()
