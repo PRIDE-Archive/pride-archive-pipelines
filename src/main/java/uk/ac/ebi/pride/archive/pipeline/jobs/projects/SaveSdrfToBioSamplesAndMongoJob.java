@@ -6,6 +6,7 @@ import com.univocity.parsers.tsv.TsvParserSettings;
 import com.univocity.parsers.tsv.TsvWriter;
 import com.univocity.parsers.tsv.TsvWriterSettings;
 import lombok.extern.slf4j.Slf4j;
+import org.apache.commons.io.FileUtils;
 import org.eclipse.jgit.api.Git;
 import org.springframework.batch.core.Job;
 import org.springframework.batch.core.Step;
@@ -16,17 +17,20 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
-import org.springframework.hateoas.Resource;
 import uk.ac.ebi.biosamples.client.BioSamplesClient;
 import uk.ac.ebi.biosamples.model.Attribute;
 import uk.ac.ebi.biosamples.model.ExternalReference;
 import uk.ac.ebi.biosamples.model.Relationship;
-import uk.ac.ebi.biosamples.model.Sample;
-import uk.ac.ebi.biosamples.model.SubmittedViaType;
 import uk.ac.ebi.pride.archive.dataprovider.common.Tuple;
+import uk.ac.ebi.pride.archive.dataprovider.file.ProjectFileType;
 import uk.ac.ebi.pride.archive.pipeline.jobs.AbstractArchiveJob;
 import uk.ac.ebi.pride.archive.pipeline.utility.HashUtils;
 import uk.ac.ebi.pride.archive.pipeline.utility.PrideFilePathUtility;
+import uk.ac.ebi.pride.data.exception.SubmissionFileException;
+import uk.ac.ebi.pride.data.io.SubmissionFileParser;
+import uk.ac.ebi.pride.data.io.SubmissionFileWriter;
+import uk.ac.ebi.pride.data.model.DataFile;
+import uk.ac.ebi.pride.data.model.Submission;
 import uk.ac.ebi.pride.mongodb.archive.model.projects.MongoPrideProject;
 import uk.ac.ebi.pride.mongodb.archive.model.sdrf.MongoPrideSdrf;
 import uk.ac.ebi.pride.mongodb.archive.service.projects.PrideProjectMongoService;
@@ -34,11 +38,12 @@ import uk.ac.ebi.pride.mongodb.archive.service.sdrf.PrideSdrfMongoService;
 
 import java.io.BufferedReader;
 import java.io.File;
+import java.io.IOException;
 import java.io.InputStream;
 import java.io.InputStreamReader;
+import java.nio.charset.Charset;
 import java.nio.file.Files;
 import java.nio.file.Paths;
-import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashMap;
@@ -47,6 +52,9 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
+
+import static uk.ac.ebi.pride.archive.pipeline.utility.PrideFilePathUtility.GENERATED;
+import static uk.ac.ebi.pride.archive.pipeline.utility.PrideFilePathUtility.SUBMITTED;
 
 @Configuration
 @Slf4j
@@ -67,6 +75,12 @@ public class SaveSdrfToBioSamplesAndMongoJob extends AbstractArchiveJob {
 
     @Value("${pride.archive.data.path}")
     private String prideRepoRootPath;
+
+    @Value(("${ftp.protocol.url}"))
+    private String ftpProtocolUrl;
+
+    @Value(("${ldc.staging.base.dir}"))
+    private String ldcStagingBaseFolder;
 
     @Value("${projectsSdrfFolder:#{null}}")
     private String projectsSdrfFolder;
@@ -94,7 +108,7 @@ public class SaveSdrfToBioSamplesAndMongoJob extends AbstractArchiveJob {
                 .start(pullFromGithub())
                 .start(readTsvStep())
                 .next(sdrfSaveToBioSamplesAndMongoStep())
-                .next(syncToFtp())
+               // .next(syncToFtp())
                 .build();
     }
 
@@ -204,10 +218,10 @@ public class SaveSdrfToBioSamplesAndMongoJob extends AbstractArchiveJob {
      This method is to check whether the project is being republished with same sdrf.
      */
     private boolean checkFilesAlreadySaved(String fileChecksum, String projectAccession) {
-        Set<String> fileChecksums = prideSdrfMongoService.getUniqueFileChecksumsOfProject(projectAccession);
+        /*Set<String> fileChecksums = prideSdrfMongoService.getUniqueFileChecksumsOfProject(projectAccession);
         if (fileChecksums.contains(fileChecksum)) {
             return true;
-        }
+        }*/
         return false;
     }
 
@@ -222,13 +236,14 @@ public class SaveSdrfToBioSamplesAndMongoJob extends AbstractArchiveJob {
     }
 
     private void saveToBioSampleAndMongo(String accession, Map<String, Tuple<String,List<Record>>> fileCheckSumToSdrfContents) {
-        Map<String, String> sampleChecksumAccession = getSampleChecksumAccession(accession);
+       // Map<String, String> sampleChecksumAccession = getSampleChecksumAccession(accession);
         for (Map.Entry<String, Tuple<String,List<Record>>> fileCheckSumToSdrfContent : fileCheckSumToSdrfContents.entrySet()) {
-            String fileChecksum = fileCheckSumToSdrfContent.getKey();
+            /*String fileChecksum = fileCheckSumToSdrfContent.getKey();
             List<Record> sdrfRecords = fileCheckSumToSdrfContent.getValue().getValue();
-            String[] headers = sdrfRecords.get(0).getMetaData().headers();
-            TsvWriter tsvWriter = getTsvWriter(accession,
-                    fileCheckSumToSdrfContent.getValue().getKey(), headers);
+            String[] headers = sdrfRecords.get(0).getMetaData().headers();*/
+            String fileName = fileCheckSumToSdrfContent.getValue().getKey();
+            File outputSdrfFile = new File(getSdrfFilePath(accession) + fileName);
+            /*TsvWriter tsvWriter = getTsvWriter(accession,outputSdrfFile, headers);
             sdrfRecords.remove(0); // remove header
             for (Record sdrfRecord : sdrfRecords) {
                 String sampleName = accession + "-" + sdrfRecord.getString(SOURCE_NAME);
@@ -251,13 +266,69 @@ public class SaveSdrfToBioSamplesAndMongoJob extends AbstractArchiveJob {
                 sampleToSave.put(headers[0], sampleName);
                 saveSamplesToMongo(accession, fileChecksum, sampleToSave);
                 saveRowToFile(tsvWriter, sdrfRecord, sampleName, sampleChecksum, sampleAccession);
-            }
-            tsvWriter.close();
+            }*/
+            addToSubmissionFileAndCopyToStaging(accession, outputSdrfFile);
+            //tsvWriter.close();
+
         }
-        if (samplesToSave.size() > 0) {
+       /* if (samplesToSave.size() > 0) {
             prideSdrfMongoService.saveSdrfList(samplesToSave);
+        }*/
+    }
+
+    private void addToSubmissionFileAndCopyToStaging(String accession, File file) {
+        Optional<MongoPrideProject> mongoPrideProject = prideProjectMongoService.findByAccession(accession);
+        String submissionFilePath = PrideFilePathUtility.getSubmissionFilePath(mongoPrideProject.get(), prideRepoRootPath);
+        log.info("Processing submission file " + submissionFilePath);
+        try {
+            File submissionFile = new File(submissionFilePath);
+            Submission submission = SubmissionFileParser.parse(submissionFile);
+            DataFile sdrfDataFile = new DataFile(file, ProjectFileType.EXPERIMENTAL_DESIGN);
+            addToSubmissonFile(submission, submissionFile, sdrfDataFile);
+            addToReadMeFileAndCopyToStaging(mongoPrideProject.get(), sdrfDataFile);
+        } catch (Exception ex) {
+            log.error("Error in parsing Submission file for accession: " + accession);
+        }
+
+    }
+
+    private void addToReadMeFileAndCopyToStaging(MongoPrideProject mongoPrideProject, DataFile sdrfDataFile) {
+        File readmeFile = new File(PrideFilePathUtility.getReadMeFilePath(mongoPrideProject, prideRepoRootPath));
+        try {
+            log.info("Appending Readme file" + readmeFile.getPath());
+            FileUtils.write(readmeFile, "\n" + sdrfDataFile.getFileId() + "\t" + sdrfDataFile.getFileName() + "\t" +
+                    sdrfDataFile.getFilePath().replace(prideRepoRootPath, ftpProtocolUrl) + "\t"
+                    + sdrfDataFile.getFileType() + "\t-", Charset.defaultCharset(), true);
+            log.info("Copying Readme and Sdrf file to staging");
+            FileUtils.copyFile(readmeFile, new File(readmeFile.getAbsolutePath()
+                    .replace(prideRepoRootPath, ldcStagingBaseFolder)
+                    .replace(GENERATED + File.separator, "")));
+            FileUtils.copyFile(sdrfDataFile.getFile(), new File(sdrfDataFile.getFile().getAbsolutePath()
+                    .replace(prideRepoRootPath, ldcStagingBaseFolder)
+                    .replace(SUBMITTED + File.separator, "")));
+        } catch (IOException e) {
+            String errorMessage = "Error writing to" + readmeFile.getAbsolutePath();
+            log.error(errorMessage);
+            throw new RuntimeException(errorMessage);
         }
     }
+
+    private void addToSubmissonFile(Submission submission, File submissionFile, DataFile sdrfDataFile) {
+        try {
+            if (!submission.containsDataFile(sdrfDataFile)) {
+                Integer maxFileId = submission.getDataFiles()
+                        .stream().map(dataFile -> dataFile.getFileId()).max(Integer::compareTo).get();
+                sdrfDataFile.setFileId(maxFileId + 1);
+                submission.addDataFile(sdrfDataFile);
+                SubmissionFileWriter.write(submission, submissionFile);
+            }
+        } catch (SubmissionFileException e) {
+            String errorMessage = "Error writing to" + submissionFile.getPath();
+            log.error(errorMessage);
+            throw new RuntimeException(errorMessage);
+        }
+    }
+
 
     private void saveRowToFile(TsvWriter tsvWriter, Record sdrfRecord, String sampleName, String sampleChecksum, String sampleAccession) {
         tsvWriter.addValue(SOURCE_NAME, sampleName);
@@ -270,14 +341,13 @@ public class SaveSdrfToBioSamplesAndMongoJob extends AbstractArchiveJob {
         tsvWriter.writeValuesToRow();
     }
 
-    private TsvWriter getTsvWriter(String accession, String fileName, String[] headers) {
+    private TsvWriter getTsvWriter(String accession, File file, String[] headers) {
         List<String> headersList = new ArrayList<>();
         headersList.addAll(Arrays.asList(headers));
         headersList.add(SAMPLE_CHECKSUM);
         headersList.add(SAMPLE_ACCESSION);
-        File outputFile = new File(getSdrfFilePath(accession) + fileName);
-        log.info("Creating output File " + outputFile.getName());
-        TsvWriter tsvWriter = new TsvWriter(outputFile, new TsvWriterSettings());
+        log.info("Creating output File " + file.getAbsolutePath());
+        TsvWriter tsvWriter = new TsvWriter(file, new TsvWriterSettings());
         tsvWriter.writeHeaders(headersList);
         return tsvWriter;
     }
