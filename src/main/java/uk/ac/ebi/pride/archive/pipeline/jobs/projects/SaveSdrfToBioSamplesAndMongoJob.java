@@ -72,6 +72,7 @@ public class SaveSdrfToBioSamplesAndMongoJob extends AbstractArchiveJob {
     private static final String PULL_FROM_GITHUB = "pullFromGithub";
     private static final String SYNC_TO_FTP = "syncToFtp";
     private static final String SYNC_SCRIPT = "./syncProjectLDC.sh";
+    public static final String BECOME_PRIDE_ADM_CP = "become pride_adm cp ";
 
     @Value("${pride.archive.data.path}")
     private String prideRepoRootPath;
@@ -299,16 +300,25 @@ public class SaveSdrfToBioSamplesAndMongoJob extends AbstractArchiveJob {
             FileUtils.write(readmeFile, "\n" + sdrfDataFile.getFileId() + "\t" + sdrfDataFile.getFileName() + "\t" +
                     sdrfDataFile.getFilePath().replace(prideRepoRootPath, ftpProtocolUrl) + "\t"
                     + sdrfDataFile.getFileType() + "\t-", Charset.defaultCharset(), true);
-            log.info("Copying Readme and Sdrf file to staging");
-            FileUtils.copyFile(readmeFile, new File(readmeFile.getAbsolutePath()
+            Process cpReadme = Runtime.getRuntime().exec(BECOME_PRIDE_ADM_CP + readmeFile.getAbsolutePath()
+                    +" "+ readmeFile.getAbsolutePath()
+                            .replace(prideRepoRootPath, ldcStagingBaseFolder)
+                            .replace(GENERATED + File.separator, ""));
+            Process cpSdrf = Runtime.getRuntime().exec(BECOME_PRIDE_ADM_CP + sdrfDataFile.getFile().getAbsolutePath()
+                    +" "+ sdrfDataFile.getFile().getAbsolutePath()
                     .replace(prideRepoRootPath, ldcStagingBaseFolder)
-                    .replace(GENERATED + File.separator, "")));
-            FileUtils.copyFile(sdrfDataFile.getFile(), new File(sdrfDataFile.getFile().getAbsolutePath()
-                    .replace(prideRepoRootPath, ldcStagingBaseFolder)
-                    .replace(SUBMITTED + File.separator, "")));
+                    .replace(SUBMITTED + File.separator, ""));
+            try {
+                log.info("Copying Readme file to staging");
+                cpReadme.waitFor();
+                log.info("Copying Sdrf file to staging");
+                cpSdrf.waitFor();
+            } catch (InterruptedException e) {
+                log.error("Error copyting to staging area" +"\n" + e.getMessage());
+            }
         } catch (IOException e) {
             String errorMessage = "Error writing to" + readmeFile.getAbsolutePath();
-            log.error(errorMessage);
+            log.error(errorMessage +"\n" + e.getMessage());
             throw new RuntimeException(errorMessage);
         }
     }
