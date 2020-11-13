@@ -122,7 +122,7 @@ public class SaveSdrfToBioSamplesAndMongoJob extends AbstractArchiveJob {
                 .start(readTsvStep())
                 .next(sdrfSaveToBioSamplesAndMongoStep())
                 // .next(syncToFtp())
-                .next(syncOracleToMongo())
+                //.next(syncOracleToMongo())
                 .build();
     }
 
