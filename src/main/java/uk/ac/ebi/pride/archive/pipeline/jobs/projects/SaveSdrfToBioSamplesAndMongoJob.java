@@ -22,10 +22,15 @@ import uk.ac.ebi.biosamples.model.Attribute;
 import uk.ac.ebi.biosamples.model.ExternalReference;
 import uk.ac.ebi.biosamples.model.Relationship;
 import uk.ac.ebi.pride.archive.dataprovider.common.Tuple;
+import uk.ac.ebi.pride.archive.dataprovider.file.ProjectFileSource;
 import uk.ac.ebi.pride.archive.dataprovider.file.ProjectFileType;
 import uk.ac.ebi.pride.archive.pipeline.jobs.AbstractArchiveJob;
 import uk.ac.ebi.pride.archive.pipeline.utility.HashUtils;
 import uk.ac.ebi.pride.archive.pipeline.utility.PrideFilePathUtility;
+import uk.ac.ebi.pride.archive.repo.client.FileRepoClient;
+import uk.ac.ebi.pride.archive.repo.client.ProjectRepoClient;
+import uk.ac.ebi.pride.archive.repo.models.file.ProjectFile;
+import uk.ac.ebi.pride.archive.repo.models.project.Project;
 import uk.ac.ebi.pride.data.exception.SubmissionFileException;
 import uk.ac.ebi.pride.data.io.SubmissionFileParser;
 import uk.ac.ebi.pride.data.io.SubmissionFileWriter;
@@ -72,6 +77,7 @@ public class SaveSdrfToBioSamplesAndMongoJob extends AbstractArchiveJob {
     private static final String PULL_FROM_GITHUB = "pullFromGithub";
     private static final String SYNC_TO_FTP = "syncToFtp";
     private static final String SYNC_SCRIPT = "./syncProjectLDC.sh";
+    private static final String ORACLE_TO_MONGO = "./spring_batch_mongo_sync_add_all_projects.sh";
     public static final String BECOME_PRIDE_ADM_CP = "become pride_adm cp ";
 
     @Value("${pride.archive.data.path}")
@@ -100,6 +106,12 @@ public class SaveSdrfToBioSamplesAndMongoJob extends AbstractArchiveJob {
     @Autowired
     private PrideProjectMongoService prideProjectMongoService;
 
+    @Autowired
+    private FileRepoClient fileRepoClient;
+
+    @Autowired
+    private ProjectRepoClient projectRepoClient;
+
     private Map<String, Map<String, Tuple<String, List<Record>>>> accessionToSdrfContents = new HashMap<>();
 
     @Bean
@@ -109,51 +121,10 @@ public class SaveSdrfToBioSamplesAndMongoJob extends AbstractArchiveJob {
                 .start(pullFromGithub())
                 .start(readTsvStep())
                 .next(sdrfSaveToBioSamplesAndMongoStep())
-               // .next(syncToFtp())
+                // .next(syncToFtp())
+                .next(syncOracleToMongo())
                 .build();
     }
-
-    private Step syncToFtp() {
-        return stepBuilderFactory.get(SYNC_TO_FTP)
-                .tasklet(syncToFtpTasklet()).build();
-    }
-
-    private Tasklet syncToFtpTasklet() {
-        return (stepContribution, chunkContext) -> {
-            log.info("Executing sync shell script: " + SYNC_SCRIPT);
-            Process p = new ProcessBuilder(SYNC_SCRIPT).start();
-            p.waitFor();
-        /* correct 'snap-release pride' output behaviour:
-            [INFO] Running snap-release for pride
-            [SUCCESS] Snap-release finished for project pride
-           anything else, or no output, is an error
-        */
-            InputStream inputStream = p.getInputStream();
-            BufferedReader bufferedReader = new BufferedReader(new InputStreamReader(inputStream));
-            String line;
-            boolean syncSuccess = false;
-            while ((line = bufferedReader.readLine()) != null) {
-                log.info(line);
-                if (line.contains("SUCCESS")) {
-                    syncSuccess = true;
-                }
-            }
-            bufferedReader.close();
-            inputStream.close();
-            if (!syncSuccess) {
-                inputStream = p.getErrorStream();
-                String msg = "Failed to sync project with LDC";
-                log.error(msg);
-                bufferedReader = new BufferedReader(new InputStreamReader(inputStream));
-                while ((line = bufferedReader.readLine()) != null) {
-                    log.error(line);
-                }
-                throw new IllegalStateException(msg);
-            }
-            return RepeatStatus.FINISHED;
-        };
-    }
-
 
     private Step pullFromGithub() {
         return stepBuilderFactory.get(PULL_FROM_GITHUB)
@@ -178,8 +149,23 @@ public class SaveSdrfToBioSamplesAndMongoJob extends AbstractArchiveJob {
         return stepBuilderFactory
                 .get(SAVE_TO_BIO_SAMPLES_AND_MONGO_STEP)
                 .tasklet(saveToBioSamplesAndMongoTasklet()).build();
-
     }
+
+    private Step syncToFtp() {
+        return stepBuilderFactory.get(SYNC_TO_FTP)
+                .tasklet(syncToFtpTasklet()).build();
+    }
+
+    private Step syncOracleToMongo() {
+        return stepBuilderFactory.get(SYNC_TO_FTP)
+                .tasklet((stepContribution, chunkContext) -> {
+                    log.info("Executing oracle to mongo script: " + ORACLE_TO_MONGO);
+                    Process p = new ProcessBuilder(ORACLE_TO_MONGO).start();
+                    p.waitFor();
+                    return RepeatStatus.FINISHED;
+                }).build();
+    }
+
 
     private Tasklet readTsvTasklet() {
         return (stepContribution, chunkContext) -> {
@@ -239,8 +225,8 @@ public class SaveSdrfToBioSamplesAndMongoJob extends AbstractArchiveJob {
     private void saveToBioSampleAndMongo(String accession, Map<String, Tuple<String,List<Record>>> fileCheckSumToSdrfContents) {
        // Map<String, String> sampleChecksumAccession = getSampleChecksumAccession(accession);
         for (Map.Entry<String, Tuple<String,List<Record>>> fileCheckSumToSdrfContent : fileCheckSumToSdrfContents.entrySet()) {
-            /*String fileChecksum = fileCheckSumToSdrfContent.getKey();
-            List<Record> sdrfRecords = fileCheckSumToSdrfContent.getValue().getValue();
+            String fileChecksum = fileCheckSumToSdrfContent.getKey();
+            /*List<Record> sdrfRecords = fileCheckSumToSdrfContent.getValue().getValue();
             String[] headers = sdrfRecords.get(0).getMetaData().headers();*/
             String fileName = fileCheckSumToSdrfContent.getValue().getKey();
             File outputSdrfFile = new File(getSdrfFilePath(accession) + fileName);
@@ -268,13 +254,28 @@ public class SaveSdrfToBioSamplesAndMongoJob extends AbstractArchiveJob {
                 saveSamplesToMongo(accession, fileChecksum, sampleToSave);
                 saveRowToFile(tsvWriter, sdrfRecord, sampleName, sampleChecksum, sampleAccession);
             }*/
-            addToSubmissionFileAndCopyToStaging(accession, outputSdrfFile);
             //tsvWriter.close();
-
+            addToSubmissionFileAndCopyToStaging(accession, outputSdrfFile);
+            createFileInPostgres(outputSdrfFile, accession, fileChecksum);
         }
        /* if (samplesToSave.size() > 0) {
             prideSdrfMongoService.saveSdrfList(samplesToSave);
         }*/
+    }
+
+    private void createFileInPostgres(File outputSdrfFile, String accession, String fileChecksum) {
+        try {
+            Project project = projectRepoClient.findByAccession(accession);
+            ProjectFile projectFile = new ProjectFile();
+            projectFile.setFileName(outputSdrfFile.getName());
+            projectFile.setFileSize(Files.size(outputSdrfFile.toPath()));
+            projectFile.setFileType(ProjectFileType.EXPERIMENTAL_DESIGN);
+            projectFile.setProjectId(project.getId());
+            projectFile.setFileSource(ProjectFileSource.SUBMITTED);
+            fileRepoClient.save(projectFile);
+        } catch (IOException e) {
+            e.printStackTrace();
+        }
     }
 
     private void addToSubmissionFileAndCopyToStaging(String accession, File file) {
@@ -431,5 +432,41 @@ public class SaveSdrfToBioSamplesAndMongoJob extends AbstractArchiveJob {
             prideSdrfMongoService.saveSdrfList(samplesToSave);
             samplesToSave.clear();
         }
+    }
+
+    private Tasklet syncToFtpTasklet() {
+        return (stepContribution, chunkContext) -> {
+            log.info("Executing sync shell script: " + SYNC_SCRIPT);
+            Process p = new ProcessBuilder(SYNC_SCRIPT).start();
+            p.waitFor();
+        /* correct 'snap-release pride' output behaviour:
+            [INFO] Running snap-release for pride
+            [SUCCESS] Snap-release finished for project pride
+           anything else, or no output, is an error
+        */
+            InputStream inputStream = p.getInputStream();
+            BufferedReader bufferedReader = new BufferedReader(new InputStreamReader(inputStream));
+            String line;
+            boolean syncSuccess = false;
+            while ((line = bufferedReader.readLine()) != null) {
+                log.info(line);
+                if (line.contains("SUCCESS")) {
+                    syncSuccess = true;
+                }
+            }
+            bufferedReader.close();
+            inputStream.close();
+            if (!syncSuccess) {
+                inputStream = p.getErrorStream();
+                String msg = "Failed to sync project with LDC";
+                log.error(msg);
+                bufferedReader = new BufferedReader(new InputStreamReader(inputStream));
+                while ((line = bufferedReader.readLine()) != null) {
+                    log.error(line);
+                }
+                throw new IllegalStateException(msg);
+            }
+            return RepeatStatus.FINISHED;
+        };
     }
 }
