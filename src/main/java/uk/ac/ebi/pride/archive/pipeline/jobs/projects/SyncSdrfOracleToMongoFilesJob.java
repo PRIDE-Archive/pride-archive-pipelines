@@ -113,7 +113,6 @@ public class SyncSdrfOracleToMongoFilesJob extends AbstractArchiveJob {
      *
      * @return Step
      */
-    @Bean
     public Step syncSdrfFileInformationToMongoDBStep() {
         return stepBuilderFactory.get(SubmissionPipelineConstants.PrideArchiveStepNames.PRIDE_ARCHIVE_ORACLE_TO_MONGO_SYNC_SDRF_FILES.name())
                 .tasklet((stepContribution, chunkContext) -> {
@@ -143,7 +142,7 @@ public class SyncSdrfOracleToMongoFilesJob extends AbstractArchiveJob {
         log.info("[Solr] The project -- " + status.getAccession() + " has been inserted in SolrCloud");
     }
 
-    @Bean
+
     Step syncMongoSdrfProjectToSolrStep() {
         return stepBuilderFactory
                 .get("syncMongoSdrfProjectToSolrStep")
@@ -155,8 +154,7 @@ public class SyncSdrfOracleToMongoFilesJob extends AbstractArchiveJob {
                             doSolrSync(mongoPrideProject);
                         }
                     } else {
-                        prideProjectMongoService.findAllStream()
-                                .filter(project -> projectsContainingSdrf.contains(project.getAccession()))
+                        prideProjectMongoService.findByMultipleAccessions(projectsContainingSdrf)
                                 .forEach(this::doSolrSync);
                     }
                     return RepeatStatus.FINISHED;
