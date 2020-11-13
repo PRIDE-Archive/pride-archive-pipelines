@@ -122,7 +122,7 @@ public class SubmissionPipelineConstants {
         PRIDE_ARCHIVE_ORACLE_MONGODB_SYNC("syncOracleToMongoProjectsJob",
                 "This command will sync the Oracle Database data into MongoDB data"),
 
-        PRIDE_ARCHIVE_SDRF_ORACLE_MONGODB_FILE_SYNC("syncSdrfOracleToMongoFilesJob",
+        PRIDE_ARCHIVE_SDRF_ORACLE_MONGODB_FILE_SYNC("syncSdrfFilesToMongoAndSolrJob",
                 "This command will sync the Oracle Database sdrf files into MongoDB data"),
 
         PRIDE_ARCHIVE_MONGODB_SOLRCLOUD_SYNC_HX("syncMongoProjectToSolrCloudJob",

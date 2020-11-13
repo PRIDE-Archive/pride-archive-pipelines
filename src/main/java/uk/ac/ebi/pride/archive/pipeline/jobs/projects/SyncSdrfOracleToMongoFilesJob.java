@@ -169,7 +169,7 @@ public class SyncSdrfOracleToMongoFilesJob extends AbstractArchiveJob {
      * @return the calculatePrideArchiveDataUsage job
      */
     @Bean
-    public Job syncSdrfOracleToMongoFilesJob() {
+    public Job syncSdrfFilesToMongoAndSolrJob() {
         return jobBuilderFactory
                 .get(SubmissionPipelineConstants.PrideArchiveJobNames.PRIDE_ARCHIVE_SDRF_ORACLE_MONGODB_FILE_SYNC.getName())
                 .start(syncSdrfFileInformationToMongoDBStep())
