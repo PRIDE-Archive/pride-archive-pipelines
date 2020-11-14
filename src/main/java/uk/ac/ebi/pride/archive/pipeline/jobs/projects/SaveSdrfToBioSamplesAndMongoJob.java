@@ -24,6 +24,7 @@ import uk.ac.ebi.biosamples.model.Relationship;
 import uk.ac.ebi.pride.archive.dataprovider.common.Tuple;
 import uk.ac.ebi.pride.archive.dataprovider.file.ProjectFileSource;
 import uk.ac.ebi.pride.archive.dataprovider.file.ProjectFileType;
+import uk.ac.ebi.pride.archive.pipeline.core.transformers.PrideProjectTransformer;
 import uk.ac.ebi.pride.archive.pipeline.jobs.AbstractArchiveJob;
 import uk.ac.ebi.pride.archive.pipeline.utility.HashUtils;
 import uk.ac.ebi.pride.archive.pipeline.utility.PrideFilePathUtility;
@@ -36,10 +37,15 @@ import uk.ac.ebi.pride.data.io.SubmissionFileParser;
 import uk.ac.ebi.pride.data.io.SubmissionFileWriter;
 import uk.ac.ebi.pride.data.model.DataFile;
 import uk.ac.ebi.pride.data.model.Submission;
+import uk.ac.ebi.pride.mongodb.archive.model.files.MongoPrideFile;
+import uk.ac.ebi.pride.mongodb.archive.model.msrun.MongoPrideMSRun;
 import uk.ac.ebi.pride.mongodb.archive.model.projects.MongoPrideProject;
 import uk.ac.ebi.pride.mongodb.archive.model.sdrf.MongoPrideSdrf;
+import uk.ac.ebi.pride.mongodb.archive.service.files.PrideFileMongoService;
 import uk.ac.ebi.pride.mongodb.archive.service.projects.PrideProjectMongoService;
 import uk.ac.ebi.pride.mongodb.archive.service.sdrf.PrideSdrfMongoService;
+import uk.ac.ebi.pride.solr.api.client.SolrProjectClient;
+import uk.ac.ebi.pride.solr.commons.PrideSolrProject;
 
 import java.io.BufferedReader;
 import java.io.File;
@@ -78,7 +84,6 @@ public class SaveSdrfToBioSamplesAndMongoJob extends AbstractArchiveJob {
     private static final String PULL_FROM_GITHUB = "pullFromGithub";
     private static final String SYNC_TO_FTP = "syncToFtp";
     private static final String SYNC_SCRIPT = "./syncProjectLDC.sh";
-    private static final String ORACLE_TO_MONGO = "./spring_batch_sdrf_mongo_and_solr_sync.sh ";
     public static final String BECOME_PRIDE_ADM_CP = "become pride_adm cp ";
 
     @Value("${pride.archive.data.path}")
@@ -97,6 +102,9 @@ public class SaveSdrfToBioSamplesAndMongoJob extends AbstractArchiveJob {
     private String githubFolderPath;
 
     @Autowired
+    private SolrProjectClient solrProjectClient;
+
+    @Autowired
     private BioSamplesClient bioSamplesClient;
 
     @Autowired
@@ -108,12 +116,21 @@ public class SaveSdrfToBioSamplesAndMongoJob extends AbstractArchiveJob {
     private PrideProjectMongoService prideProjectMongoService;
 
     @Autowired
+    private PrideFileMongoService prideFileMongoService;
+
+    @Autowired
     private FileRepoClient fileRepoClient;
 
     @Autowired
     private ProjectRepoClient projectRepoClient;
 
     private Map<String, Map<String, Tuple<String, List<Record>>>> accessionToSdrfContents = new HashMap<>();
+
+    @Value("${ftp.protocol.url}")
+    private String ftpProtocol;
+
+    @Value("${aspera.protocol.url}")
+    private String asperaProtocol;
 
     @Bean
     public Job sdrfSaveToBioSamplesAndMongoJob() {
@@ -123,7 +140,8 @@ public class SaveSdrfToBioSamplesAndMongoJob extends AbstractArchiveJob {
                 .start(readTsvStep())
                 //.next(sdrfSaveToBioSamplesAndMongoStep())
                 // .next(syncToFtp())
-                .next(syncOracleToMongo())
+                .next(syncSdrfFilesToMongo())
+                .next(syncSdrfFilesToSolr())
                 .build();
     }
 
@@ -157,17 +175,61 @@ public class SaveSdrfToBioSamplesAndMongoJob extends AbstractArchiveJob {
                 .tasklet(syncToFtpTasklet()).build();
     }
 
-    private Step syncOracleToMongo() {
-        return stepBuilderFactory.get(SYNC_TO_FTP)
+    private Step syncSdrfFilesToMongo() {
+        return stepBuilderFactory.get("syncSdrfFilesToMongo")
                 .tasklet((stepContribution, chunkContext) -> {
-                    log.info("Executing oracle to mongo script: " + ORACLE_TO_MONGO);
-                    String accessionsToProcess = accessionToSdrfContents.keySet().stream().collect(Collectors.joining(","));
-                    Process p = new ProcessBuilder(ORACLE_TO_MONGO+accessionsToProcess).start();
-                    p.waitFor();
+                    List<String> accessions = accessionToSdrfContents.keySet().stream().collect(Collectors.toList());
+                    prideProjectMongoService.findByMultipleAccessions(accessions).stream().forEach(this::doSdrfFileSync);
                     return RepeatStatus.FINISHED;
-                }).build();
+                }
+                ).build();
     }
 
+    private Step syncSdrfFilesToSolr() {
+        return stepBuilderFactory
+                .get("syncSdrfFilesToSolr")
+                .tasklet((stepContribution, chunkContext) -> {
+                    List<String> accessions = accessionToSdrfContents.keySet().stream().collect(Collectors.toList());
+                    prideProjectMongoService.findByMultipleAccessions(accessions).stream().forEach(this::doSolrSync);
+                    return RepeatStatus.FINISHED;
+                })
+                .build();
+    }
+
+
+    private void doSdrfFileSync(MongoPrideProject mongoPrideProject) {
+        try {
+            Project oracleProject = projectRepoClient.findByAccession(mongoPrideProject.getAccession());
+            List<ProjectFile> oracleFiles = fileRepoClient.findAllByProjectId(oracleProject.getId());
+            oracleFiles = oracleFiles.stream()
+                    .filter(oracleFile -> oracleFile.getFileType().equals(ProjectFileType.EXPERIMENTAL_DESIGN))
+                    .collect(Collectors.toList());
+
+            if (oracleFiles == null || oracleFiles.size() == 0) {
+                return;
+            }
+            List<Tuple<MongoPrideFile, MongoPrideFile>> status = prideFileMongoService.insertAllFilesAndMsRuns(PrideProjectTransformer.transformOracleFilesToMongoFiles(oracleFiles, null, oracleProject, ftpProtocol, asperaProtocol), null);
+            log.info("Number of files has been inserted -- " + status.size());
+        } catch (Exception e) {
+            log.error(e.getMessage(), e);
+            throw new IllegalStateException(e);
+        }
+    }
+
+    private void doSolrSync(MongoPrideProject mongoPrideProject) {
+        PrideSolrProject solrProject = PrideProjectTransformer.transformProjectMongoToSolr(mongoPrideProject);
+        List<MongoPrideFile> files = prideFileMongoService.findFilesByProjectAccession(mongoPrideProject.getAccession());
+        Set<String> fileNames = files.stream().map(MongoPrideFile::getFileName).collect(Collectors.toSet());
+        solrProject.setProjectFileNames(fileNames);
+        PrideSolrProject status = null;
+        try {
+            status = solrProjectClient.upsert(solrProject);
+        } catch (IOException e) {
+            log.error(e.getMessage(), e);
+            throw new IllegalStateException(e);
+        }
+        log.info("[Solr] The project -- " + status.getAccession() + " has been inserted in SolrCloud");
+    }
 
     private Tasklet readTsvTasklet() {
         return (stepContribution, chunkContext) -> {
