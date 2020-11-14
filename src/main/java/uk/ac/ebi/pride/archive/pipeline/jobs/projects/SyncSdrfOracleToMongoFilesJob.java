@@ -76,15 +76,11 @@ public class SyncSdrfOracleToMongoFilesJob extends AbstractArchiveJob {
     @StepScope
     private String accession;
 
+    @Value("#{'${projectsContainingSdrf:PXD}'.split(',')}")
     List<String> projectsContainingSdrf = new ArrayList<>();
 
-    private void doSdrfFileSync(String accession) {
+    private void doSdrfFileSync(MongoPrideProject mongoPrideProject) {
         try {
-            Optional<MongoPrideProject> mongoPrideProjectOptional = prideProjectMongoService.findByAccession(accession);
-            if (!mongoPrideProjectOptional.isPresent()) {
-                return;
-            }
-            MongoPrideProject mongoPrideProject = mongoPrideProjectOptional.get();
             Project oracleProject = projectRepoClient.findByAccession(mongoPrideProject.getAccession());
             List<ProjectFile> oracleFiles = fileRepoClient.findAllByProjectId(oracleProject.getId());
             oracleFiles = oracleFiles.stream()
@@ -94,7 +90,6 @@ public class SyncSdrfOracleToMongoFilesJob extends AbstractArchiveJob {
             if (oracleFiles == null || oracleFiles.size() == 0) {
                 return;
             }
-            projectsContainingSdrf.add(accession);
             List<MongoPrideMSRun> msRunRawFiles = new ArrayList<>();
             List<Tuple<MongoPrideFile, MongoPrideFile>> status = prideFileMongoService.insertAllFilesAndMsRuns(PrideProjectTransformer.transformOracleFilesToMongoFiles(oracleFiles, msRunRawFiles, oracleProject, ftpProtocol, asperaProtocol), msRunRawFiles);
             log.info("Number of files has been inserted -- " + status.size());
@@ -118,9 +113,13 @@ public class SyncSdrfOracleToMongoFilesJob extends AbstractArchiveJob {
                 .tasklet((stepContribution, chunkContext) -> {
                     //String accession = chunkContext.getStepContext().getStepExecution().getJobExecution().getJobParameters().getString("accession");
                     if (accession != null) {
-                        doSdrfFileSync(accession);
-                    } else {
-                        prideProjectMongoService.getAllProjectAccessions().forEach(this::doSdrfFileSync);
+                        Optional<MongoPrideProject> mongoPrideProjectOptional = prideProjectMongoService.findByAccession(accession);
+                        if (mongoPrideProjectOptional.isPresent()) {
+                            doSdrfFileSync(mongoPrideProjectOptional.get());
+                        }
+                    } else if (projectsContainingSdrf.size() > 0) {
+                        prideProjectMongoService.findByMultipleAccessions(projectsContainingSdrf)
+                                .stream().forEach(this::doSdrfFileSync);
                     }
                     return RepeatStatus.FINISHED;
                 })

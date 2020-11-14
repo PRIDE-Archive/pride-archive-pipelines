@@ -57,6 +57,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
+import java.util.stream.Collectors;
 
 import static uk.ac.ebi.pride.archive.pipeline.utility.PrideFilePathUtility.GENERATED;
 import static uk.ac.ebi.pride.archive.pipeline.utility.PrideFilePathUtility.SUBMITTED;
@@ -77,7 +78,7 @@ public class SaveSdrfToBioSamplesAndMongoJob extends AbstractArchiveJob {
     private static final String PULL_FROM_GITHUB = "pullFromGithub";
     private static final String SYNC_TO_FTP = "syncToFtp";
     private static final String SYNC_SCRIPT = "./syncProjectLDC.sh";
-    private static final String ORACLE_TO_MONGO = "./spring_batch_mongo_sync_add_all_projects.sh";
+    private static final String ORACLE_TO_MONGO = "./spring_batch_sdrf_mongo_and_solr_sync.sh ";
     public static final String BECOME_PRIDE_ADM_CP = "become pride_adm cp ";
 
     @Value("${pride.archive.data.path}")
@@ -118,11 +119,11 @@ public class SaveSdrfToBioSamplesAndMongoJob extends AbstractArchiveJob {
     public Job sdrfSaveToBioSamplesAndMongoJob() {
         return jobBuilderFactory
                 .get(SAVE_SDRF_TO_BIO_SAMPLES_AND_MONGO_JOB)
-                .start(pullFromGithub())
+                //.start(pullFromGithub())
                 .start(readTsvStep())
-                .next(sdrfSaveToBioSamplesAndMongoStep())
+                //.next(sdrfSaveToBioSamplesAndMongoStep())
                 // .next(syncToFtp())
-                //.next(syncOracleToMongo())
+                .next(syncOracleToMongo())
                 .build();
     }
 
@@ -160,7 +161,8 @@ public class SaveSdrfToBioSamplesAndMongoJob extends AbstractArchiveJob {
         return stepBuilderFactory.get(SYNC_TO_FTP)
                 .tasklet((stepContribution, chunkContext) -> {
                     log.info("Executing oracle to mongo script: " + ORACLE_TO_MONGO);
-                    Process p = new ProcessBuilder(ORACLE_TO_MONGO).start();
+                    String accessionsToProcess = accessionToSdrfContents.keySet().stream().collect(Collectors.joining(","));
+                    Process p = new ProcessBuilder(ORACLE_TO_MONGO+accessionsToProcess).start();
                     p.waitFor();
                     return RepeatStatus.FINISHED;
                 }).build();

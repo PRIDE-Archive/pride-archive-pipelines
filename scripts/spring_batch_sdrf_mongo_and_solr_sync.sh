@@ -23,7 +23,7 @@ printUsage() {
     echo "Description: In the revised archive pipeline, this will import sdrf files from oracle to mongo and solr"
     echo "$ ./scripts/spring_batch_sdrf_mongo_and_solr_sync.sh"
     echo ""
-    echo "Usage: ./spring_batch_sdrf_mongo_and_solr_sync.sh"
+    echo "Usage: ./spring_batch_sdrf_mongo_and_solr_sync.sh PXD011181,PXD011182,PXD011183"
     echo "     Example: ./spring_batch_sdrf_mongo_and_solr_sync.sh"
 }
 
@@ -36,30 +36,19 @@ MEMORY_LIMIT_JAVA=$((MEMORY_LIMIT-MEMORY_OVERHEAD))
 cd ${0%/*}
 
 
-SKIP_FILES="false"
+ProjectsContainingSdrf=$1
 
-##### PARSE the provided parameters
-while [ "$1" != "" ]; do
-    case $1 in
-      "--skipfiles")
-        SKIP_FILES="true"
-        ;;
-    esac
-    shift
-done
+##### CHECK the provided arguments
+if [ -z ${ProjectsContainingSdrf} ]; then
+         echo "Need to enter a project accessions"
+         printUsage
+         exit 1
+fi
 
-while true; do
-	read -p $'Are you sure you want to sync \e[1;31mALL\e[0m records(y/n)?' answer
-    case $answer in
-        [Yy]* ) bsub -M ${MEMORY_LIMIT} \
+bsub -M ${MEMORY_LIMIT} \
                      -R \"rusage[mem=${MEMORY_LIMIT}]\" \
                      -q production-rh74 \
                      -g /pride/analyze_assays \
                      -u ${JOB_EMAIL} \
                      -J ${JOB_NAME} \
-                     ./runPipelineInJava.sh ${LOG_PATH} ${LOG_FILE_NAME} ${MEMORY_LIMIT_JAVA}m -jar revised-archive-submission-pipeline.jar --spring.datasource.maxPoolSize=10 --spring.batch.job.names=syncSdrfOracleToMongoFilesJob;
-				break;;
-        [Nn]* ) exit;;
-        * ) echo "Please answer yes(y) or no(n).";;
-    esac
-done
+                     ./runPipelineInJava.sh ${LOG_PATH} ${LOG_FILE_NAME} ${MEMORY_LIMIT_JAVA}m -jar revised-archive-submission-pipeline.jar --spring.datasource.maxPoolSize=10 --spring.batch.job.names=syncSdrfOracleToMongoFilesJob -Dspring-boot.run.arguments= --projectsContainingSdrf={ProjectsContainingSdrf};
