@@ -23,18 +23,14 @@ import uk.ac.ebi.biosamples.model.Relationship;
 import uk.ac.ebi.biosamples.model.Sample;
 import uk.ac.ebi.biosamples.model.SubmittedViaType;
 import uk.ac.ebi.pride.archive.dataprovider.common.Tuple;
-import uk.ac.ebi.pride.archive.pipeline.core.transformers.PrideProjectTransformer;
 import uk.ac.ebi.pride.archive.pipeline.jobs.AbstractArchiveJob;
 import uk.ac.ebi.pride.archive.pipeline.utility.HashUtils;
 import uk.ac.ebi.pride.archive.pipeline.utility.PrideFilePathUtility;
 import uk.ac.ebi.pride.mongodb.archive.model.files.MongoPrideFile;
-import uk.ac.ebi.pride.mongodb.archive.model.projects.MongoPrideProject;
 import uk.ac.ebi.pride.mongodb.archive.model.sdrf.MongoPrideSdrf;
 import uk.ac.ebi.pride.mongodb.archive.service.files.PrideFileMongoService;
 import uk.ac.ebi.pride.mongodb.archive.service.projects.PrideProjectMongoService;
 import uk.ac.ebi.pride.mongodb.archive.service.sdrf.PrideSdrfMongoService;
-import uk.ac.ebi.pride.solr.api.client.SolrProjectClient;
-import uk.ac.ebi.pride.solr.commons.PrideSolrProject;
 
 import java.io.BufferedReader;
 import java.io.File;
@@ -145,20 +141,26 @@ public class SaveSdrfToBioSamplesAndMongoJob extends AbstractArchiveJob {
 
     private void doSdrfFileSync(String accession, Map<String, Tuple<String, List<Record>>> files) {
         try {
-            String path = PrideFilePathUtility.getSubmittedFilesPath(prideProjectMongoService.findByAccession(accession).get(), prideRepoRootPath);
             List<MongoPrideFile> mongoFiles =
                     prideFileMongoService.findFilesByProjectAccession(accession);
-            mongoFiles.stream().filter(file -> files.containsKey(path + file.getFileName()))
-                    .forEach(file -> {
-                        try {
-                            file.setChecksum(HashUtils.getSha1Checksum(new File(path + file.getFileName())));
-                            prideFileMongoService.save(file);
-                            log.info("File " + file.getFileName() + " is synced to mongo with new checksum");
-                        } catch (IOException e) {
-                            log.error(e.getMessage(), e);
-                            throw new RuntimeException("Error in calculating checksum/Parsing file");
+            for (MongoPrideFile mongoPrideFile : mongoFiles) {
+                files.entrySet().stream().forEach(map -> {
+                            try {
+                                String processedSdrfFileName = map.getValue().getKey();
+                                if (processedSdrfFileName.contains(mongoPrideFile.getFileName())) {
+                                    File processedSdrfFile = new File(processedSdrfFileName);
+                                    mongoPrideFile.setChecksum(HashUtils.getSha1Checksum(processedSdrfFile));
+                                    mongoPrideFile.setFileSizeBytes(Files.size(processedSdrfFile.toPath()));
+                                    prideFileMongoService.save(mongoPrideFile);
+                                    log.info("File " + mongoPrideFile.getFileName() + " is synced to mongo with new checksum");
+                                }
+                            } catch (IOException e) {
+                                log.error(e.getMessage(), e);
+                                throw new RuntimeException("Error in calculating checksum/Parsing file");
+                            }
                         }
-                    });
+                );
+            }
         } catch (Exception e) {
             log.error(e.getMessage(), e);
             throw new IllegalStateException(e);

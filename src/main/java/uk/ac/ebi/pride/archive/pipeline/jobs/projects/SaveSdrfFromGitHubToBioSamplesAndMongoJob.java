@@ -144,12 +144,12 @@ public class SaveSdrfFromGitHubToBioSamplesAndMongoJob extends AbstractArchiveJo
     public Job githubSdrfSaveToBioSamplesAndMongoJob() {
         return jobBuilderFactory
                 .get(GITHUB_SAVE_SDRF_TO_BIO_SAMPLES_AND_MONGO_JOB)
-               // .start(pullFromGithub())
+                .start(pullFromGithub())
                 .start(readTsvStep())
-               // .next(sdrfSaveToBioSamplesAndMongoStep())
+                .next(sdrfSaveToBioSamplesAndMongoStep())
                 .next(syncSdrfFilesToMongo())
                 .next(syncSdrfFilesToSolr())
-                //.next(syncToFtp())
+                .next(syncToFtp())
                 .build();
     }
 
@@ -277,10 +277,10 @@ public class SaveSdrfFromGitHubToBioSamplesAndMongoJob extends AbstractArchiveJo
      This method is to check whether the project is being republished with same sdrf.
      */
     private boolean checkFilesAlreadySaved(String fileChecksum, String projectAccession) {
-       /* Set<String> fileChecksums = prideSdrfMongoService.getUniqueFileChecksumsOfProject(projectAccession);
+        Set<String> fileChecksums = prideSdrfMongoService.getUniqueFileChecksumsOfProject(projectAccession);
         if (fileChecksums.contains(fileChecksum)) {
             return true;
-        }*/
+        }
         return false;
     }
 
