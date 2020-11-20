@@ -256,7 +256,7 @@ public class SaveSdrfFromGitHubToBioSamplesAndMongoJob extends AbstractArchiveJo
                             TsvParser tsvParser = new TsvParser(tsvParserSettings);
                             Map<String, Tuple<String, List<Record>>> sdrfContentsToProcess
                                     = accessionToSdrfContents.get(accession);
-                            if(sdrfContentsToProcess == null){
+                            if (sdrfContentsToProcess == null) {
                                 sdrfContentsToProcess = new HashMap<>();
                             }
                             sdrfContentsToProcess.put(fileChecksum, new Tuple(fileName,
@@ -324,18 +324,19 @@ public class SaveSdrfFromGitHubToBioSamplesAndMongoJob extends AbstractArchiveJo
                 Map<String, String> sampleToSave = createSample(headers, sdrfRecord, sampleAccession, sampleChecksum);
                 sampleToSave.put(headers[0], sampleName);
                 saveSamplesToMongo(accession, fileChecksum, sampleToSave);
-                saveRowToFile(tsvWriter, sdrfRecord, sampleName, sampleChecksum, sampleAccession);
+                saveRowToFile(tsvWriter, sdrfRecord, sampleName,
+                        sampleChecksum, sampleAccession, headers);
             }
             tsvWriter.close();
             addToSubmissionFileAndCopyToStaging(accession, outputSdrfFile);
-            createFileInPostgres(outputSdrfFile, accession, fileChecksum);
+            createFileInPostgres(outputSdrfFile, accession);
         }
         if (samplesToSave.size() > 0) {
             prideSdrfMongoService.saveSdrfList(samplesToSave);
         }
     }
 
-    private void createFileInPostgres(File outputSdrfFile, String accession, String fileChecksum) {
+    private void createFileInPostgres(File outputSdrfFile, String accession) {
         try {
             Project project = projectRepoClient.findByAccession(accession);
             ProjectFile projectFile = new ProjectFile();
@@ -387,7 +388,7 @@ public class SaveSdrfFromGitHubToBioSamplesAndMongoJob extends AbstractArchiveJo
                 log.info("Copying Sdrf file to staging");
                 cpSdrf.waitFor();
             } catch (InterruptedException e) {
-                log.error("Error copyting to staging area" +"\n" + e.getMessage());
+                log.error("Error copying to staging area" + "\n" + e.getMessage());
             }
         } catch (IOException e) {
             String errorMessage = "Error writing to" + readmeFile.getAbsolutePath();
@@ -413,12 +414,16 @@ public class SaveSdrfFromGitHubToBioSamplesAndMongoJob extends AbstractArchiveJo
     }
 
 
-    private void saveRowToFile(TsvWriter tsvWriter, Record sdrfRecord, String sampleName, String sampleChecksum, String sampleAccession) {
-        tsvWriter.addValue(SOURCE_NAME, sampleName);
-        List<String> row = new ArrayList<>();
-        row.addAll(Arrays.asList(sdrfRecord.getValues()));
-        row.remove(0); //remove original source name
-        tsvWriter.addValues(row);
+    private void saveRowToFile(TsvWriter tsvWriter, Record sdrfRecord,
+                               String sampleName, String sampleChecksum,
+                               String sampleAccession, String[] headers) {
+        for (String header : headers) {
+            if (header.toLowerCase().equals(SOURCE_NAME)) {
+                tsvWriter.addValue(SOURCE_NAME, sampleName);
+            } else {
+                tsvWriter.addValue(header, sdrfRecord.getString(header));
+            }
+        }
         tsvWriter.addValue(SAMPLE_CHECKSUM, sampleChecksum);
         tsvWriter.addValue(SAMPLE_ACCESSION, sampleAccession);
         tsvWriter.writeValuesToRow();

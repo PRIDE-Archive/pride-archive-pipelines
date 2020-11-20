@@ -37,6 +37,7 @@ import java.io.File;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.InputStreamReader;
+import java.nio.charset.Charset;
 import java.nio.file.Files;
 import java.nio.file.Paths;
 import java.time.Instant;
@@ -47,7 +48,6 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
-import java.util.stream.Collectors;
 
 import static uk.ac.ebi.pride.archive.pipeline.utility.PrideFilePathUtility.SUBMITTED;
 
@@ -73,6 +73,8 @@ public class SaveSdrfToBioSamplesAndMongoJob extends AbstractArchiveJob {
     public static final String TSV = ".tsv";
     public static final String SDRF = "sdrf";
     public static final String SYNC_SDRF_FILES_TO_MONGO = "syncSdrfFilesToMongo";
+    public static final String TMP = ".tmp";
+    public static final String MAKE_SAMPLE_ACCESSIONS_PRIVATE_TXT = "makeSampleAccessionsPrivate.txt";
 
     @Value("${pride.archive.data.path}")
     private String prideRepoRootPath;
@@ -97,7 +99,9 @@ public class SaveSdrfToBioSamplesAndMongoJob extends AbstractArchiveJob {
     @Autowired
     private PrideFileMongoService prideFileMongoService;
 
-    private Map<String, Map<String, Tuple<String, List<Record>>>> accessionToSdrfContents = new HashMap<>();
+    private Map<String, Tuple<String, List<Record>>> sdrfContentsToProcess = new HashMap<>();
+
+    private String submittedFilesPath;
 
     @Bean
     public Job sdrfSaveToBioSamplesAndMongoJob() {
@@ -127,8 +131,7 @@ public class SaveSdrfToBioSamplesAndMongoJob extends AbstractArchiveJob {
     private Step syncSdrfFilesToMongo() {
         return stepBuilderFactory.get(SYNC_SDRF_FILES_TO_MONGO)
                 .tasklet((stepContribution, chunkContext) -> {
-                            accessionToSdrfContents.entrySet().stream()
-                                    .forEach(entry -> doSdrfFileSync(entry.getKey(), entry.getValue()));
+                    doSdrfFileSync(sdrfContentsToProcess);
                             return RepeatStatus.FINISHED;
                         }
                 ).build();
@@ -139,7 +142,7 @@ public class SaveSdrfToBioSamplesAndMongoJob extends AbstractArchiveJob {
                 .tasklet(syncToFtpTasklet()).build();
     }
 
-    private void doSdrfFileSync(String accession, Map<String, Tuple<String, List<Record>>> files) {
+    private void doSdrfFileSync(Map<String, Tuple<String, List<Record>>> files) {
         try {
             List<MongoPrideFile> mongoFiles =
                     prideFileMongoService.findFilesByProjectAccession(accession);
@@ -171,7 +174,7 @@ public class SaveSdrfToBioSamplesAndMongoJob extends AbstractArchiveJob {
         return (stepContribution, chunkContext) -> {
             TsvParserSettings tsvParserSettings = new TsvParserSettings();
             tsvParserSettings.setNullValue("not available");
-            String submittedFilesPath = PrideFilePathUtility
+            submittedFilesPath = PrideFilePathUtility
                     .getSubmittedFilesPath(prideProjectMongoService.findByAccession(accession).get(), prideRepoRootPath);
             Map<String, Tuple<String, List<Record>>> sdrfContentsToProcess = new HashMap<>();
             Files.walk(Paths.get(submittedFilesPath), Integer.MAX_VALUE).skip(1).forEach(file -> {
@@ -190,8 +193,6 @@ public class SaveSdrfToBioSamplesAndMongoJob extends AbstractArchiveJob {
                         }
                         sdrfContentsToProcess.put(fileChecksum, new Tuple(submittedFilesPath + fileName,
                                 records));
-                        accessionToSdrfContents.put(accession, sdrfContentsToProcess);
-
                     } catch (Exception e) {
                         throw new RuntimeException("Error in calculating checksum/Parsing file  " + fileName);
                     }
@@ -215,62 +216,59 @@ public class SaveSdrfToBioSamplesAndMongoJob extends AbstractArchiveJob {
 
     private Tasklet saveToBioSamplesAndMongoTasklet() {
         return (stepContribution, chunkContext) -> {
-            for (Map.Entry<String, Map<String, Tuple<String, List<Record>>>> accessionSdrfContent : accessionToSdrfContents.entrySet()) {
-                String projectAccession = accessionSdrfContent.getKey();
-                saveToBioSampleAndMongo(projectAccession, accessionSdrfContent.getValue());
+            Map<String, String> sampleChecksumAccession = getSampleChecksumAccession();
+            Set<String> sampleAccessionsToMakePrivate = new HashSet<>(sampleChecksumAccession.values());
+            for (Map.Entry<String, Tuple<String, List<Record>>> fileCheckSumToSdrfContent : sdrfContentsToProcess.entrySet()) {
+                String fileChecksum = fileCheckSumToSdrfContent.getKey();
+                List<Record> sdrfRecords = fileCheckSumToSdrfContent.getValue().getValue();
+                String[] headers = sdrfRecords.get(0).getMetaData().headers();
+                String submittedSdrfFilePath = fileCheckSumToSdrfContent.getValue().getKey();
+                TsvWriter tsvWriter = getTsvWriter(new File(submittedSdrfFilePath + TMP), headers);
+                sdrfRecords.remove(0); // remove header
+                for (Record sdrfRecord : sdrfRecords) {
+                    String sampleName = accession + "-" + sdrfRecord.getString(SOURCE_NAME);
+                    Sample sample = Sample.build(sampleName,
+                            null, PRIDE_DOMAIN, Instant.now(), null,
+                            getAttributes(headers, sdrfRecord), getRelationShip(headers, sdrfRecord),
+                            getExternalReferences(headers, sdrfRecord, accession), SubmittedViaType.JSON_API);
+
+                    // This is to check whether the sample already saved to biosamples
+                    String sampleChecksum = HashUtils.getSha256Checksum(sampleName + sample.getAttributes().toString());
+                    String sampleAccession = "";
+                    if (!sampleChecksumAccession.containsKey(sampleChecksum)) {
+                        Resource<Sample> sampleResource = bioSamplesClient.persistSampleResource(sample);
+                        sampleAccession = sampleResource.getContent().getAccession();
+                        sampleChecksumAccession.put(sampleChecksum, sampleAccession);
+                    } else {
+                        sampleAccession = sampleChecksumAccession.get(sampleChecksum);
+                    }
+                    sampleAccessionsToMakePrivate.remove(sampleAccession);
+                    Map<String, String> sampleToSave = createSample(headers, sdrfRecord, sampleAccession, sampleChecksum);
+                    sampleToSave.put(SOURCE_NAME, sampleName);
+                    saveSamplesToMongo(accession, fileChecksum, sampleToSave);
+                    saveRowToFile(tsvWriter, sdrfRecord, sampleName, sampleChecksum, sampleAccession, headers);
+                }
+                tsvWriter.close();
+                copyToStaging(submittedSdrfFilePath);
+            }
+            Files.write(Paths.get(new File(submittedFilesPath + MAKE_SAMPLE_ACCESSIONS_PRIVATE_TXT).getPath()),
+                    sampleAccessionsToMakePrivate,
+                    Charset.defaultCharset());
+            if (samplesToSave.size() > 0) {
+                prideSdrfMongoService.saveSdrfList(samplesToSave);
             }
             return RepeatStatus.FINISHED;
         };
     }
 
-    private void saveToBioSampleAndMongo(String accession, Map<String, Tuple<String, List<Record>>> fileCheckSumToSdrfContents) {
-        Map<String, String> sampleChecksumAccession = getSampleChecksumAccession(accession);
-        for (Map.Entry<String, Tuple<String, List<Record>>> fileCheckSumToSdrfContent : fileCheckSumToSdrfContents.entrySet()) {
-            String fileChecksum = fileCheckSumToSdrfContent.getKey();
-            List<Record> sdrfRecords = fileCheckSumToSdrfContent.getValue().getValue();
-            String[] headers = sdrfRecords.get(0).getMetaData().headers();
-            String fileName = fileCheckSumToSdrfContent.getValue().getKey();
-            File outputSdrfFile = new File(fileName + ".tmp");
-            TsvWriter tsvWriter = getTsvWriter(outputSdrfFile, headers);
-            sdrfRecords.remove(0); // remove header
-            for (Record sdrfRecord : sdrfRecords) {
-                String sampleName = accession + "-" + sdrfRecord.getString(SOURCE_NAME);
-                Sample sample = Sample.build(sampleName,
-                        null, PRIDE_DOMAIN, Instant.now(), null,
-                        getAttributes(headers, sdrfRecord), getRelationShip(headers, sdrfRecord),
-                        getExternalReferences(headers, sdrfRecord, accession), SubmittedViaType.JSON_API);
-
-                // This is to check whether the sample already saved to biosamples
-                String sampleChecksum = HashUtils.getSha256Checksum(sampleName + sample.getAttributes().toString());
-                String sampleAccession = "";
-                if (!sampleChecksumAccession.containsKey(sampleChecksum)) {
-                    Resource<Sample> sampleResource = bioSamplesClient.persistSampleResource(sample);
-                    sampleAccession = sampleResource.getContent().getAccession();
-                    sampleChecksumAccession.put(sampleChecksum, sampleAccession);
-                } else {
-                    sampleAccession = sampleChecksumAccession.get(sampleChecksum);
-                }
-                Map<String, String> sampleToSave = createSample(headers, sdrfRecord, sampleAccession, sampleChecksum);
-                sampleToSave.put(SOURCE_NAME, sampleName);
-                saveSamplesToMongo(accession, fileChecksum, sampleToSave);
-                saveRowToFile(tsvWriter, sdrfRecord, sampleName, sampleChecksum, sampleAccession);
-            }
-            tsvWriter.close();
-            copyToStaging(outputSdrfFile);
-        }
-        if (samplesToSave.size() > 0) {
-            prideSdrfMongoService.saveSdrfList(samplesToSave);
-        }
-    }
-
-    private void copyToStaging(File sdrfDataFile) {
-        String originalSdrfPath = sdrfDataFile.getAbsolutePath().replace(".tmp", "");
+    private void copyToStaging(String submittedSdrfFilePath) {
         try {
-            Process renameOriginalSdrf = Runtime.getRuntime().exec("cp " + originalSdrfPath +
-                    " " + originalSdrfPath + ".submitted");
-            Process renameTmpToOriginalSdrf = Runtime.getRuntime().exec("cp " + originalSdrfPath + ".tmp " + originalSdrfPath);
-            Process cpSdrf = Runtime.getRuntime().exec(BECOME_PRIDE_ADM_CP + originalSdrfPath
-                    + " " + originalSdrfPath
+            Process renameOriginalSdrf = Runtime.getRuntime().exec("cp " + submittedSdrfFilePath +
+                    " " + submittedSdrfFilePath + ".submitted");
+            Process renameTmpToOriginalSdrf = Runtime.getRuntime().exec("cp " + submittedSdrfFilePath + TMP + " " +
+                    submittedSdrfFilePath);
+            Process cpSdrf = Runtime.getRuntime().exec(BECOME_PRIDE_ADM_CP + submittedSdrfFilePath
+                    + " " + submittedSdrfFilePath
                     .replace(prideRepoRootPath, ldcStagingBaseFolder)
                     .replace(SUBMITTED + File.separator, ""));
             try {
@@ -289,12 +287,16 @@ public class SaveSdrfToBioSamplesAndMongoJob extends AbstractArchiveJob {
     }
 
 
-    private void saveRowToFile(TsvWriter tsvWriter, Record sdrfRecord, String sampleName, String sampleChecksum, String sampleAccession) {
-        tsvWriter.addValue(SOURCE_NAME, sampleName);
-        List<String> row = new ArrayList<>();
-        row.addAll(Arrays.asList(sdrfRecord.getValues()));
-        row.remove(0); //remove original source name
-        tsvWriter.addValues(row);
+    private void saveRowToFile(TsvWriter tsvWriter, Record sdrfRecord,
+                               String sampleName, String sampleChecksum,
+                               String sampleAccession, String[] headers) {
+        for (String header : headers) {
+            if (header.toLowerCase().equals(SOURCE_NAME)) {
+                tsvWriter.addValue(SOURCE_NAME, sampleName);
+            } else {
+                tsvWriter.addValue(header, sdrfRecord.getString(header));
+            }
+        }
         tsvWriter.addValue(SAMPLE_CHECKSUM, sampleChecksum);
         tsvWriter.addValue(SAMPLE_ACCESSION, sampleAccession);
         tsvWriter.writeValuesToRow();
@@ -311,7 +313,7 @@ public class SaveSdrfToBioSamplesAndMongoJob extends AbstractArchiveJob {
         return tsvWriter;
     }
 
-    private Map<String, String> getSampleChecksumAccession(String accession) {
+    private Map<String, String> getSampleChecksumAccession() {
         List<MongoPrideSdrf> mongoPrideSdrfList = prideSdrfMongoService.findByProjectAccession(accession);
         Map<String, String> sampleChecksumAccession = new HashMap<>();
         if (mongoPrideSdrfList != null) {
