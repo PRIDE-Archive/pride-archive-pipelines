@@ -62,3 +62,10 @@ deploy_dev:
   #  only:
   #    - master
   when: manual
+
+deploy_hl:
+  environment: hl
+  extends: .deploy_script
+  #  only:
+  #    - master
+  when: manual
