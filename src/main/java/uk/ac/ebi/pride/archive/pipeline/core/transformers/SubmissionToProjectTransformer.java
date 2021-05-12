@@ -3,21 +3,20 @@ package uk.ac.ebi.pride.archive.pipeline.core.transformers;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.commons.lang3.StringUtils;
 import org.springframework.util.Assert;
+import uk.ac.ebi.pride.archive.dataprovider.utils.TitleConstants;
 import uk.ac.ebi.pride.archive.repo.client.CvParamRepoClient;
 import uk.ac.ebi.pride.archive.repo.client.UserRepoClient;
 import uk.ac.ebi.pride.archive.repo.models.param.CvParam;
 import uk.ac.ebi.pride.archive.repo.models.project.*;
 import uk.ac.ebi.pride.archive.repo.models.user.User;
+import uk.ac.ebi.pride.data.model.Contact;
 import uk.ac.ebi.pride.data.model.Submission;
 import uk.ac.ebi.pride.pubmed.PubMedFetcher;
 import uk.ac.ebi.pride.pubmed.model.EupmcReferenceSummary;
 
 import java.io.IOException;
 import java.net.URISyntaxException;
-import java.util.HashSet;
-import java.util.LinkedList;
-import java.util.Optional;
-import java.util.Set;
+import java.util.*;
 
 /**
  * This class helps to transform the Submission object to Project Object
@@ -28,11 +27,11 @@ public class SubmissionToProjectTransformer {
     UserRepoClient userRepoClient;
     CvParamRepoClient cvParamRepoClient;
     Project modifiedProject;
+    List<CvParam> cvParamList;
 
     public SubmissionToProjectTransformer(CvParamRepoClient cvParamRepoClient,  UserRepoClient userRepoClient) {
         this.cvParamRepoClient = cvParamRepoClient;
         this.userRepoClient = userRepoClient;
-
     }
 
     /**
@@ -43,14 +42,17 @@ public class SubmissionToProjectTransformer {
      */
     public Project transform(Submission submission, Project modifiedProject) throws IOException {
         this.modifiedProject = modifiedProject;
+        this.cvParamList = cvParamRepoClient.findAll();
         modifiedProject.setTitle(submission.getProjectMetaData().getProjectTitle());
         modifiedProject.setProjectDescription(submission.getProjectMetaData().getProjectDescription());
         modifiedProject.setDataProcessingProtocol(submission.getProjectMetaData().getDataProcessingProtocol());
         modifiedProject.setSampleProcessingProtocol(submission.getProjectMetaData().getSampleProcessingProtocol());
         modifiedProject.setKeywords(submission.getProjectMetaData().getKeywords());
 
-        // set submitter (change only if the dataset is private)
+        // set submitter and labhead (change only if the dataset is private)
         if(!modifiedProject.isPublicProject()){
+
+            // update submitter
             final String newEmail = submission.getProjectMetaData().getSubmitterContact().getEmail();
             Optional<User> submitterContact = userRepoClient.findByEmail(newEmail);
             if(submitterContact.isPresent()) {
@@ -59,6 +61,21 @@ public class SubmissionToProjectTransformer {
                 modifiedProject.setSubmitter(submitterContactUser);
             }else{
                 log.warn("No user found with email : " + newEmail);
+            }
+
+            // update Labhead
+            Contact labHeadContact = submission.getProjectMetaData().getLabHeadContact();
+
+            if (labHeadContact.getName() != null &&
+                    labHeadContact.getEmail() != null &&
+                    labHeadContact.getAffiliation() != null) {
+
+                LabHead labHead = convertLabHead(labHeadContact);
+                List<LabHead> labHeads = new ArrayList<>();
+                labHeads.add(labHead);
+                modifiedProject.setLabHeads(labHeads);
+            }else{
+                log.warn("Missing Labhead information(name, email, Affiliation)!");
             }
         }else{
             log.warn("Submitter cannot be changed for public datasets!");
@@ -133,6 +150,53 @@ public class SubmissionToProjectTransformer {
     }
 
     /**
+     * Convert Contact To LabHead
+     * @param labHeadContact  labHeadContact
+     * @return labHead object
+     */
+    public LabHead convertLabHead(uk.ac.ebi.pride.data.model.Contact labHeadContact) {
+        LabHead labHead = new LabHead();
+
+        // default title for lab head is Dr
+        labHead.setTitle(TitleConstants.Dr);
+
+        //try to split the name on whitespace
+        String[] tokens = labHeadContact.getName().split("\\s+");
+        if (tokens.length > 1) {
+            //put everything in first name except last token
+            String lastName = tokens[tokens.length - 1];
+            tokens[tokens.length - 1] = "";
+            StringBuilder sb = new StringBuilder();
+            for (String token : tokens) {
+                sb.append(token).append(" ");
+            }
+            labHead.setFirstName(sb.toString().trim());
+            labHead.setLastName(lastName);
+        } else {
+            labHead.setFirstName(tokens[0]);
+            //set to blank string so that db doesn't barf
+            labHead.setLastName(" ");
+        }
+
+        //email
+        String email = labHeadContact.getEmail();
+        if (email == null || "".equals(email.trim())) {
+            log.warn("No email given for labHead: " + labHeadContact.toString());
+        }
+
+        labHead.setEmail(email);
+
+        //affiliations
+        String affiliation = labHeadContact.getAffiliation();
+        if (affiliation == null || "".equals(affiliation)) {
+            log.warn("No affiliation given for labHead: " + labHeadContact.toString());
+        }
+        labHead.setAffiliation(affiliation);
+
+        return labHead;
+    }
+
+    /**
      * Convert CvParam To ProjectSampleCvParam
      * @param submissionCvParam CvParam from the Submission object
      * @return ProjectSampleCvParam object
@@ -140,7 +204,7 @@ public class SubmissionToProjectTransformer {
     private ProjectSampleCvParam cvParamToProjectSampleCvParam(uk.ac.ebi.pride.data.model.CvParam submissionCvParam) {
 
         ProjectSampleCvParam projectSampleCvParam = new ProjectSampleCvParam();
-        CvParam cvParam = new CvParam();
+        CvParam cvParam;
 
         for (ProjectSampleCvParam param: modifiedProject.getSamples()) {
             if(param.getAccession().equals(submissionCvParam.getAccession())){
@@ -149,14 +213,31 @@ public class SubmissionToProjectTransformer {
             }
         }
 
-        CvParamCheckExists(submissionCvParam, cvParam);
-        cvParam.setAccession(submissionCvParam.getAccession());
-        cvParam.setName(submissionCvParam.getName());
-        cvParam.setCvLabel(submissionCvParam.getCvLabel());
+        CvParam cvParamExisting =CvParamCheckExists(submissionCvParam);
+        cvParam = getCvParam(submissionCvParam, cvParamExisting);
         projectSampleCvParam.setCvParam(cvParam);
         projectSampleCvParam.setProject(modifiedProject);
         projectSampleCvParam.setValue(cvParam.getValue());
         return projectSampleCvParam;
+    }
+
+    /**
+     * Use the Cv Param if exists, otherwise copy data to a new CvParam
+     * @param submissionCvParam CvParam with modified values
+     * @param cvParamExisting Existing CvParam from the database
+     * @return CvParam
+     */
+    private CvParam getCvParam(uk.ac.ebi.pride.data.model.CvParam submissionCvParam, CvParam cvParamExisting) {
+        CvParam cvParam;
+        if(cvParamExisting != null) {
+            cvParam = cvParamExisting;
+        }else{
+            cvParam =  new CvParam();
+            cvParam.setAccession(submissionCvParam.getAccession());
+            cvParam.setName(submissionCvParam.getName());
+            cvParam.setCvLabel(submissionCvParam.getCvLabel());
+        }
+        return cvParam;
     }
 
     /**
@@ -167,7 +248,6 @@ public class SubmissionToProjectTransformer {
     private ProjectExperimentType cvParamToProjectExperimentTypeCvParam(uk.ac.ebi.pride.data.model.CvParam submissionCvParam) {
 
         ProjectExperimentType projectExperimentType = new ProjectExperimentType();
-        CvParam cvParam = new CvParam();
 
         for (ProjectExperimentType param: modifiedProject.getExperimentTypes()) {
             if(param.getAccession().equals(submissionCvParam.getAccession())){
@@ -176,10 +256,8 @@ public class SubmissionToProjectTransformer {
             }
         }
 
-        CvParamCheckExists(submissionCvParam, cvParam);
-        cvParam.setAccession(submissionCvParam.getAccession());
-        cvParam.setName(submissionCvParam.getName());
-        cvParam.setCvLabel(submissionCvParam.getCvLabel());
+        CvParam cvParamExisting =CvParamCheckExists(submissionCvParam);
+        CvParam cvParam = getCvParam(submissionCvParam, cvParamExisting);
         projectExperimentType.setCvParam(cvParam);
         projectExperimentType.setProject(modifiedProject);
         projectExperimentType.setValue(cvParam.getValue());
@@ -194,7 +272,6 @@ public class SubmissionToProjectTransformer {
     private ProjectInstrumentCvParam cvParamToProjectInstrumentCvParam(uk.ac.ebi.pride.data.model.CvParam submissionCvParam) {
 
         ProjectInstrumentCvParam projectInstrumentCvParam = new ProjectInstrumentCvParam();
-        CvParam cvParam = new CvParam();
 
         for (ProjectInstrumentCvParam param: modifiedProject.getInstruments()) {
             if(param.getAccession().equals(submissionCvParam.getAccession())){
@@ -203,10 +280,8 @@ public class SubmissionToProjectTransformer {
             }
         }
 
-        CvParamCheckExists(submissionCvParam, cvParam);
-        cvParam.setAccession(submissionCvParam.getAccession());
-        cvParam.setName(submissionCvParam.getName());
-        cvParam.setCvLabel(submissionCvParam.getCvLabel());
+        CvParam cvParamExisting =CvParamCheckExists(submissionCvParam);
+        CvParam cvParam = getCvParam(submissionCvParam, cvParamExisting);
         projectInstrumentCvParam.setCvParam(cvParam);
         projectInstrumentCvParam.setProject(modifiedProject);
         projectInstrumentCvParam.setValue(cvParam.getValue());
@@ -221,7 +296,6 @@ public class SubmissionToProjectTransformer {
     private ProjectQuantificationMethodCvParam cvParamToProjectQuantificationMethodCvParam(uk.ac.ebi.pride.data.model.CvParam submissionCvParam) {
 
         ProjectQuantificationMethodCvParam projectQuantificationMethodCvParam = new ProjectQuantificationMethodCvParam();
-        CvParam cvParam = new CvParam();
 
         for (ProjectQuantificationMethodCvParam param: modifiedProject.getQuantificationMethods()) {
             if(param.getAccession().equals(submissionCvParam.getAccession())){
@@ -230,10 +304,8 @@ public class SubmissionToProjectTransformer {
             }
         }
 
-        CvParamCheckExists(submissionCvParam, cvParam);
-        cvParam.setAccession(submissionCvParam.getAccession());
-        cvParam.setName(submissionCvParam.getName());
-        cvParam.setCvLabel(submissionCvParam.getCvLabel());
+        CvParam cvParamExisting = CvParamCheckExists(submissionCvParam);
+        CvParam cvParam = getCvParam(submissionCvParam, cvParamExisting);
         projectQuantificationMethodCvParam.setCvParam(cvParam);
         projectQuantificationMethodCvParam.setProject(modifiedProject);
         projectQuantificationMethodCvParam.setValue(cvParam.getValue());
@@ -248,7 +320,6 @@ public class SubmissionToProjectTransformer {
     private ProjectPTM cvParamToProjectPTM(uk.ac.ebi.pride.data.model.CvParam submissionCvParam) {
 
         ProjectPTM projectPTM = new ProjectPTM();
-        CvParam cvParam = new CvParam();
 
         for (ProjectPTM param: modifiedProject.getPtms()) {
             if(param.getAccession().equals(submissionCvParam.getAccession())){
@@ -257,10 +328,8 @@ public class SubmissionToProjectTransformer {
             }
         }
 
-        CvParamCheckExists(submissionCvParam, cvParam);
-        cvParam.setAccession(submissionCvParam.getAccession());
-        cvParam.setName(submissionCvParam.getName());
-        cvParam.setCvLabel(submissionCvParam.getCvLabel());
+        CvParam cvParamExisting =CvParamCheckExists(submissionCvParam);
+        CvParam cvParam = getCvParam(submissionCvParam, cvParamExisting);
         projectPTM.setCvParam(cvParam);
         projectPTM.setProject(modifiedProject);
         projectPTM.setValue(cvParam.getValue());
@@ -271,22 +340,16 @@ public class SubmissionToProjectTransformer {
      * Check if the Cv Param is already in the database. If it is already exists, use the id of the CV param
      * to update the record. If not, leave id empty to insert a new one
      * @param submissionCvParam
-     * @param cvParam
      */
-    private void CvParamCheckExists(uk.ac.ebi.pride.data.model.CvParam submissionCvParam, CvParam cvParam) {
-        try {
-            CvParam cvParamExits =  cvParamRepoClient.findByAccession(submissionCvParam.getAccession());
-            if(!submissionCvParam.getName().toLowerCase().trim().equals(cvParamExits.getName().toLowerCase().trim())){
-                log.warn("CV term ("+ submissionCvParam.getAccession()+") mismatch found! " + submissionCvParam.getName()
-                        + " is reported as "
-                        + cvParamExits.getName() + " in the database");
-            }
-            if(cvParamExits.getId() !=  null){
-                cvParam.setId(cvParamExits.getId());
-            }
-        } catch (IOException e) {
-            e.printStackTrace();
-        }
+    private CvParam CvParamCheckExists(uk.ac.ebi.pride.data.model.CvParam submissionCvParam) {
+        return cvParamList
+                .stream()
+                .filter(param -> param.getCvLabel().toLowerCase().trim().equals(
+                        submissionCvParam.getCvLabel().toLowerCase().trim()) &&
+                param.getAccession().toLowerCase().trim().equals(
+                        submissionCvParam.getAccession().toLowerCase().trim()))
+                .findFirst()
+                .orElse(null);
     }
 
     /**
